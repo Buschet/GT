@@ -6,3 +6,6 @@ ta==0.11.0
 tensorflow==2.15.0
 requests==2.31.0
 python-dotenv==1.0.0
+matplotlib==3.8.2
+mplfinance==0.12.10b0
+plotly==5.18.0
