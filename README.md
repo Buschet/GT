@@ -8,9 +8,11 @@ Sistema di analisi trading avanzato che combina **Intelligenza Artificiale** e *
 - ⏱️ **Supporto Multi-Timeframe**: 1m, 5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d, 1w, 1M
 - 📈 **30+ Indicatori Tecnici**: RSI, MACD, Bollinger Bands, Medie Mobili, ATR, OBV, Stochastic e altri
 - 🤖 **Machine Learning**: Random Forest e Gradient Boosting per predizioni AI
-- 🎯 **Segnali di Trading Intelligenti**: Combina AI e analisi tecnica tradizionale
+- 🧠 **Rete Neurale Multi-Timeframe**: Architettura 15-30-9-1 con analisi Delfini/Squali/Balene
+- 🎯 **Segnali di Trading Intelligenti**: Combina AI, Neural Network e analisi tecnica
 - 📊 **Confidence Score**: Ogni segnale include un punteggio di fiducia
 - 🔍 **Analisi Multi-Simbolo**: Analizza contemporaneamente multiple coppie
+- 🎯 **Identificazione Punti Entry/Exit**: Crossover automatici e livelli di ingresso/uscita
 
 ## 📋 Requisiti
 
