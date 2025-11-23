@@ -454,11 +454,261 @@ def run_analyze_mode():
 	print("="*80)
 
 # ==============================================================================
+# MODALITÀ COPY
+# ==============================================================================
+
+def load_json_data(json_path):
+	"""Carica i dati dal file JSON"""
+	try:
+		with open(json_path, 'r', encoding='utf-8') as f:
+			data = json.load(f)
+		return data
+	except Exception as e:
+		print(f"✗ Errore caricamento JSON: {str(e)}")
+		return None
+
+def set_attribute_value(attr, value):
+	"""Imposta il valore di un attributo XObject"""
+	try:
+		if hasattr(attr, 'real') and isinstance(value, (int, float)):
+			attr.real = float(value)
+		elif hasattr(attr, 'integer') and isinstance(value, int):
+			attr.integer = value
+		elif hasattr(attr, 'boolean') and isinstance(value, bool):
+			attr.boolean = value
+		elif hasattr(attr, 'string') and isinstance(value, str):
+			attr.string = value
+		elif hasattr(attr, 'quantityScalar') and isinstance(value, (int, float)):
+			attr.quantityScalar.value = float(value)
+		elif hasattr(attr, 'quantityVector3') and isinstance(value, list):
+			v = attr.quantityVector3
+			if len(value) >= 3:
+				v.setValueAt(0, value[0])
+				v.setValueAt(1, value[1])
+				v.setValueAt(2, value[2])
+		elif hasattr(attr, 'index') and isinstance(value, int):
+			attr.index = value
+	except Exception as e:
+		print(f"    [WARNING] Errore impostazione attributo: {str(e)}")
+
+def create_or_get_physical_property(prop_data):
+	"""Crea o recupera una physical property esistente"""
+	prop_name = prop_data['property_name']
+	prop_type = prop_data['property_type']
+
+	# Cerca se esiste già una proprietà con lo stesso nome
+	for _, existing_pp in doc.physicalProperties.items():
+		if existing_pp.name == prop_name:
+			print(f"    ✓ Usando physical property esistente: {prop_name}")
+			return existing_pp
+
+	# Crea nuova physical property
+	try:
+		print(f"    Creando physical property: {prop_name} (tipo: {prop_type})")
+
+		pp_meta = doc.metaDataPhysicalProperty(prop_type)
+		pp_xobj = MpcXObject.createInstanceOf(pp_meta)
+
+		# Applica parametri
+		if 'parameters' in prop_data and prop_data['parameters']:
+			for param_name, param_value in prop_data['parameters'].items():
+				try:
+					if param_name in pp_xobj.attributes:
+						attr = pp_xobj.attributes[param_name]
+						set_attribute_value(attr, param_value)
+						print(f"      - {param_name} = {param_value}")
+				except Exception as e:
+					print(f"      [WARNING] Errore parametro {param_name}: {str(e)}")
+
+		new_pp = MpcProperty()
+		new_pp.id = doc.physicalProperties.getlastkey(0) + 1
+		new_pp.name = prop_name
+		new_pp.XObject = pp_xobj
+
+		doc.addPhysicalProperty(new_pp)
+		doc.commitChanges()
+
+		print(f"    ✓ Physical property creata: {prop_name} [ID: {new_pp.id}]")
+		return new_pp
+
+	except Exception as e:
+		print(f"    ✗ Errore creazione physical property: {str(e)}")
+		return None
+
+def create_or_get_element_property(prop_data):
+	"""Crea o recupera una element property esistente"""
+	prop_name = prop_data['property_name']
+	prop_type = prop_data['property_type']
+
+	# Cerca se esiste già
+	for _, existing_ep in doc.elementProperties.items():
+		if existing_ep.name == prop_name:
+			print(f"    ✓ Usando element property esistente: {prop_name}")
+			return existing_ep
+
+	# Crea nuova element property
+	try:
+		print(f"    Creando element property: {prop_name} (tipo: {prop_type})")
+
+		ep_meta = doc.metaDataElementProperty(prop_type)
+		ep_xobj = MpcXObject.createInstanceOf(ep_meta)
+
+		# Applica parametri
+		if 'parameters' in prop_data and prop_data['parameters']:
+			for param_name, param_value in prop_data['parameters'].items():
+				try:
+					if param_name in ep_xobj.attributes:
+						attr = ep_xobj.attributes[param_name]
+						set_attribute_value(attr, param_value)
+						print(f"      - {param_name} = {param_value}")
+				except Exception as e:
+					print(f"      [WARNING] Errore parametro {param_name}: {str(e)}")
+
+		new_ep = MpcElementProperty()
+		new_ep.id = doc.elementProperties.getlastkey(0) + 1
+		new_ep.name = prop_name
+		new_ep.XObject = ep_xobj
+
+		doc.addElementProperty(new_ep)
+		doc.commitChanges()
+
+		print(f"    ✓ Element property creata: {prop_name} [ID: {new_ep.id}]")
+		return new_ep
+
+	except Exception as e:
+		print(f"    ✗ Errore creazione element property: {str(e)}")
+		return None
+
+def run_copy_mode():
+	"""Esegue la modalità COPY"""
+	print("\n[MODALITÀ COPY ATTIVA]")
+	print("Importando geometrie e ricreando proprietà...")
+	print("-"*80)
+
+	# Carica JSON
+	print("\n[FASE 1] Caricamento JSON")
+	json_path = os.path.join(input_folder, "STKO_Analysis.json")
+	json_data = load_json_data(json_path)
+
+	if not json_data:
+		print("✗ Impossibile procedere senza dati JSON")
+		return
+
+	geometries_data = json_data['geometries']
+	print(f"✓ Caricate {len(geometries_data)} geometrie dal JSON")
+
+	# IMPORT GEOMETRIE
+	print("\n[FASE 2] Import Geometrie")
+	print("-"*80)
+
+	import_count = 0
+	import_errors = 0
+
+	for idx, geom_data in enumerate(geometries_data, 1):
+		geom_name = geom_data['name']
+		geom_id = geom_data['id']
+
+		print(f"\n  [{idx}/{len(geometries_data)}] Importando: {geom_name}")
+
+		# Trova file esportato
+		safe_name = "".join(c for c in geom_name if c.isalnum() or c in (' ', '-', '_')).strip()
+		if not safe_name:
+			safe_name = f"geometry_{geom_id}"
+
+		nome_geometry = f"geom_{geom_id}_{safe_name}"
+		geometry_path = os.path.join(geometries_folder, nome_geometry)
+
+		# Verifica esistenza (cerca con possibili estensioni)
+		found_file = None
+		for ext in ['.stp', '.step', '.iges', '.igs', '.brep']:
+			test_path = geometry_path + ext
+			if os.path.exists(test_path):
+				found_file = test_path
+				break
+
+		if found_file:
+			try:
+				# Imposta path per import
+				sett = QSettings()
+				sett.beginGroup('FileDialogManager')
+				sett.beginGroup('LD_ImpGeom')
+				sett.setValue('LastDirectory', os.path.dirname(found_file))
+				sett.endGroup()
+				sett.endGroup()
+
+				# Import geometria tramite dialog
+				App.runCommand("ImportGeometry")
+
+				import_count += 1
+				print(f"    ✓ Importata da: {found_file}")
+
+			except Exception as e:
+				import_errors += 1
+				print(f"    ✗ Errore import: {str(e)}")
+		else:
+			import_errors += 1
+			print(f"    ✗ File non trovato: {geometry_path}.*")
+
+		App.processEvents()
+
+	print(f"\n✓ Geometrie importate: {import_count}/{len(geometries_data)}")
+	if import_errors > 0:
+		print(f"✗ Errori import: {import_errors}")
+
+	# RICREA PROPRIETÀ (senza ancora assegnarle)
+	print("\n[FASE 3] Ricreazione Proprietà")
+	print("-"*80)
+
+	created_physical_props = {}
+	created_element_props = {}
+
+	for idx, geom_data in enumerate(geometries_data, 1):
+		print(f"\n  [{idx}/{len(geometries_data)}] Analizzando proprietà di: {geom_data['name']}")
+
+		# Physical Properties
+		all_physical = (
+			geom_data['properties']['physical']['vertices'] +
+			geom_data['properties']['physical']['edges'] +
+			geom_data['properties']['physical']['faces'] +
+			geom_data['properties']['physical']['solids']
+		)
+
+		for prop_data in all_physical:
+			prop_name = prop_data['property_name']
+			if prop_name not in created_physical_props:
+				pp = create_or_get_physical_property(prop_data)
+				if pp:
+					created_physical_props[prop_name] = pp
+
+		# Element Properties
+		all_element = (
+			geom_data['properties']['element']['vertices'] +
+			geom_data['properties']['element']['edges'] +
+			geom_data['properties']['element']['faces'] +
+			geom_data['properties']['element']['solids']
+		)
+
+		for prop_data in all_element:
+			prop_name = prop_data['property_name']
+			if prop_name not in created_element_props:
+				ep = create_or_get_element_property(prop_data)
+				if ep:
+					created_element_props[prop_name] = ep
+
+	print("\n" + "="*80)
+	print("IMPORT COMPLETATO!")
+	print(f"Geometrie importate: {import_count}")
+	print(f"Physical Properties create: {len(created_physical_props)}")
+	print(f"Element Properties create: {len(created_element_props)}")
+	print("\n💡 PROSSIMO STEP:")
+	print("   Implementare coordinate matching per assegnare proprietà")
+	print("="*80)
+
+# ==============================================================================
 # ESECUZIONE
 # ==============================================================================
 
 if not Copy:
 	run_analyze_mode()
 else:
-	print("\n[TODO] Modalità COPY non ancora implementata")
-	print("Coming soon...")
+	run_copy_mode()
