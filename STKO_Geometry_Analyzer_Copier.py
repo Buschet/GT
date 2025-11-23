@@ -31,28 +31,25 @@ ANALYZE_CONFIG = {
 	'export_csv': True,
 	'export_report': True,
 	'export_coordinates': True,
-	'export_step': True,                 # 🆕 Esporta geometrie in formato STEP (.stp)
-	'use_native_export': False,          # 🆕 True = usa App.runCommand (dialog) | False = API diretta
-	'step_folder': 'STKO_STEP_Export',   # 🆕 Cartella per file STEP
+	'export_geometries': True,           # Esporta geometrie via dialog nativo STKO
 	'output_filename': 'STKO_Analysis',  # Nome file base (senza estensione)
 	'add_timestamp': False,              # True = aggiunge _YYYYMMDD_HHMMSS al nome
 	'verbose': True
 }
 # IMPORTANTE: Se add_timestamp = False, i file saranno sovrascritti ad ogni esecuzione
 # IMPORTANTE: output_filename deve corrispondere a input_json_file in COPY_CONFIG
-# IMPORTANTE: step_folder deve corrispondere a step_folder in COPY_CONFIG
+# IMPORTANTE: Le geometrie vengono esportate nella cartella STKO_Export/
 
 # Configurazione per modalità COPIA (Copy = True)
 COPY_CONFIG = {
 	# File JSON da cui leggere i dati per ricreare le geometrie
 	'input_json_file': 'STKO_Analysis.json',  # ← Deve corrispondere a output_filename + '.json'
-	'step_folder': 'STKO_STEP_Export',        # 🆕 Cartella contenente i file STEP da importare
+	'import_folder': 'STKO_Export',           # Cartella contenente i file esportati da importare
 
 	# Opzioni di creazione
 	'create_new_document': False,  # True = nuovo doc | False = aggiungi al corrente
 	'prefix_names': 'Copy_',       # Prefisso per nomi geometrie copiate
 	'copy_properties': True,        # Copia anche le proprietà
-	'use_step_import': True,        # 🆕 True = importa da STEP | False = usa vecchio metodo
 	'verbose': True,
 
 	# Filtri opzionali per copiare solo alcune geometrie
@@ -717,123 +714,80 @@ def run_analyze_mode():
 					])
 		print(f"✓ Esportato Coordinate: {filename}")
 
-	# 🆕 EXPORT STEP FILES
-	if ANALYZE_CONFIG['export_step']:
-		step_folder = ANALYZE_CONFIG['step_folder']
-		if ANALYZE_CONFIG['add_timestamp']:
-			step_folder = f"{step_folder}_{timestamp}"
+	# 🆕 EXPORT GEOMETRIE
+	if ANALYZE_CONFIG['export_geometries']:
+		# Crea cartella STKO_Export
+		export_folder = 'STKO_Export'
+		abs_export_folder = os.path.abspath(export_folder)
 
-		# Ottieni percorso assoluto della cartella
-		abs_step_folder = os.path.abspath(step_folder)
+		if not os.path.exists(abs_export_folder):
+			os.makedirs(abs_export_folder)
 
-		# Crea cartella se non esiste
-		if not os.path.exists(abs_step_folder):
-			os.makedirs(abs_step_folder)
-
-		use_native = ANALYZE_CONFIG.get('use_native_export', False)
-		method_name = "Metodo Nativo (Dialog)" if use_native else "API Diretta (Automatico)"
-
-		print(f"\n[EXPORT STEP FILES - {method_name}]")
-		print(f"Cartella: {abs_step_folder}/")
+		print(f"\n[EXPORT GEOMETRIE - Metodo Nativo Dialog]")
+		print(f"Cartella: {abs_export_folder}/")
 		print("-"*80)
 
 		export_count = 0
 		export_errors = 0
 
-		if use_native:
-			# ═══════════════════════════════════════════════════════════
-			# METODO 1: Comando Nativo STKO (con dialog interattivo)
-			# ═══════════════════════════════════════════════════════════
-			# Salva selezione corrente
-			current_selection = doc.scene.getSelection()
+		for idx, (geom_id, geom) in enumerate(doc.geometries.items(), 1):
+			try:
+				safe_name = "".join(c for c in geom.name if c.isalnum() or c in (' ', '-', '_')).strip()
+				if not safe_name:
+					safe_name = f"geometry_{geom_id}"
 
-			for idx, (geom_id, geom) in enumerate(doc.geometries.items(), 1):
-				try:
-					safe_name = "".join(c for c in geom.name if c.isalnum() or c in (' ', '-', '_')).strip()
-					if not safe_name:
-						safe_name = f"geometry_{geom_id}"
+				nome_geometry = f"geom_{geom_id}_{safe_name}"
+				new_dir = f"{abs_export_folder}/{nome_geometry}"
 
-					nome_exp = f"geom_{geom_id}_{safe_name}"
-					new_dir = f"{abs_step_folder}/{nome_exp}"
+				# Seleziona geometria
+				doc.scene.select(geom)
 
-					# Seleziona geometria
-					doc.scene.clearSelection()
-					doc.scene.select(geom)
+				# Imposta path nelle QSettings per pre-popolare il dialog
+				sett = QSettings()
+				sett.beginGroup('FileDialogManager')
+				sett.beginGroup('LD_ImpGeom')
+				sett.setValue('LastDirectory', new_dir)
+				sett.endGroup()
+				sett.endGroup()
 
-					# Imposta path nelle QSettings
-					sett = QSettings()
-					sett.beginGroup('FileDialogManager')
-					sett.beginGroup('LD_ImpGeom')
-					sett.setValue('LastDirectory', new_dir)
-					sett.endGroup()
-					sett.endGroup()
+				# Esegui comando export (apre dialog STKO)
+				App.runCommand("ExportGeometry")
 
-					# Esegui comando export (apre dialog)
-					App.runCommand("ExportGeometry")
+				# Deseleziona tutto
+				doc.scene.unselectAll()
 
-					step_filename = f"{new_dir}.stp"
-					all_geometries_data['geometries'][idx-1]['step_file'] = step_filename
+				# Salva percorso nel JSON (assumiamo estensione di default)
+				exported_file = f"{new_dir}"  # Il path esatto dipende dall'estensione scelta dall'utente
+				all_geometries_data['geometries'][idx-1]['exported_file'] = exported_file
 
-					export_count += 1
-					if ANALYZE_CONFIG['verbose']:
-						print(f"  [{idx}/{len(doc.geometries)}] ✓ {geom.name} → {step_filename}")
+				export_count += 1
+				if ANALYZE_CONFIG['verbose']:
+					print(f"  [{idx}/{len(doc.geometries)}] ✓ {geom.name}")
 
-				except Exception as e:
-					export_errors += 1
-					print(f"  [{idx}/{len(doc.geometries)}] ✗ Errore: {str(e)}")
-					all_geometries_data['geometries'][idx-1]['step_file'] = None
+			except Exception as e:
+				export_errors += 1
+				print(f"  [{idx}/{len(doc.geometries)}] ✗ Errore: {str(e)}")
+				all_geometries_data['geometries'][idx-1]['exported_file'] = None
+				doc.scene.unselectAll()
 
-				App.processEvents()
+			App.processEvents()
 
-			# Ripristina selezione
-			doc.scene.clearSelection()
-			for item in current_selection:
-				doc.scene.select(item)
-
-		else:
-			# ═══════════════════════════════════════════════════════════
-			# METODO 2: API Diretta (completamente automatico)
-			# ═══════════════════════════════════════════════════════════
-			for idx, (geom_id, geom) in enumerate(doc.geometries.items(), 1):
-				try:
-					safe_name = "".join(c for c in geom.name if c.isalnum() or c in (' ', '-', '_')).strip()
-					if not safe_name:
-						safe_name = f"geometry_{geom_id}"
-
-					step_filename = f"{abs_step_folder}/geom_{geom_id}_{safe_name}.stp"
-
-					# Esporta usando API diretta
-					geom.shape.exportToSTEP(step_filename)
-
-					all_geometries_data['geometries'][idx-1]['step_file'] = step_filename
-
-					export_count += 1
-					if ANALYZE_CONFIG['verbose']:
-						print(f"  [{idx}/{len(doc.geometries)}] ✓ {geom.name} → {step_filename}")
-
-				except Exception as e:
-					export_errors += 1
-					print(f"  [{idx}/{len(doc.geometries)}] ✗ Errore: {str(e)}")
-					all_geometries_data['geometries'][idx-1]['step_file'] = None
-
-				App.processEvents()
-
-		print(f"\n✓ File STEP esportati: {export_count}/{len(doc.geometries)}")
+		print(f"\n✓ Geometrie esportate: {export_count}/{len(doc.geometries)}")
 		if export_errors > 0:
 			print(f"✗ Errori export: {export_errors}")
 
-		# Ri-esporta JSON con percorsi STEP aggiornati
+		# Ri-esporta JSON con percorsi aggiornati
 		if ANALYZE_CONFIG['export_json']:
 			filename = f"{base_filename}.json"
 			with open(filename, 'w', encoding='utf-8') as f:
 				json.dump(all_geometries_data, f, indent=2, ensure_ascii=False)
-			print(f"✓ JSON aggiornato con percorsi STEP: {filename}")
+			print(f"✓ JSON aggiornato con percorsi export: {filename}")
 
 	print("\n" + "="*80)
 	print("ANALISI COMPLETATA!")
 	print(f"Geometrie analizzate: {all_geometries_data['total_geometries']}")
-	if ANALYZE_CONFIG['export_step']:
-		print(f"File STEP esportati: {step_folder}/")
+	if ANALYZE_CONFIG['export_geometries']:
+		print(f"Geometrie esportate in: STKO_Export/")
 	print(f"\n💡 PROSSIMO STEP:")
 	print(f"   Per ricreazione: Imposta Copy = True")
 	print(f"   Il file JSON '{base_filename}.json' è pronto")
