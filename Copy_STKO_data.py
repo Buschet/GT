@@ -601,59 +601,51 @@ def run_copy_mode():
 	print("\n[FASE 2] Import Geometrie")
 	print("-"*80)
 
-	import_count = 0
-	import_errors = 0
+	# Chiedi estensione file da importare
+	print("\nEstensioni disponibili: .stp, .step, .iges, .igs, .brep")
+	print("Quale estensione vuoi importare? (premi invio per .stp)")
+	# Per ora usiamo .stp come default
+	estensione = '.stp'
 
-	for idx, geom_data in enumerate(geometries_data, 1):
-		geom_name = geom_data['name']
-		geom_id = geom_data['id']
+	# Conta file con quell'estensione nella cartella Geometries
+	file_list = []
+	for file in os.listdir(geometries_folder):
+		if file.endswith(estensione):
+			file_list.append(file)
 
-		print(f"\n  [{idx}/{len(geometries_data)}] Importando: {geom_name}")
+	numero_file = len(file_list)
 
-		# Trova file esportato
-		safe_name = "".join(c for c in geom_name if c.isalnum() or c in (' ', '-', '_')).strip()
-		if not safe_name:
-			safe_name = f"geometry_{geom_id}"
+	if numero_file == 0:
+		print(f"✗ Nessun file {estensione} trovato in {geometries_folder}")
+		print("Verifica che i file siano stati esportati correttamente")
+		return
 
-		nome_geometry = f"geom_{geom_id}_{safe_name}"
-		geometry_path = os.path.join(geometries_folder, nome_geometry)
+	print(f"✓ Trovati {numero_file} file {estensione} da importare")
+	print("-"*80)
 
-		# Verifica esistenza (cerca con possibili estensioni)
-		found_file = None
-		for ext in ['.stp', '.step', '.iges', '.igs', '.brep']:
-			test_path = geometry_path + ext
-			if os.path.exists(test_path):
-				found_file = test_path
-				break
+	# Importa tutti i file
+	for i, filename in enumerate(file_list, 1):
+		App.clearTerminal()
+		print(f"[{i}/{numero_file}] Importando: {filename}")
 
-		if found_file:
-			try:
-				# Imposta path per import
-				sett = QSettings()
-				sett.beginGroup('FileDialogManager')
-				sett.beginGroup('LD_ImpGeom')
-				sett.setValue('LastDirectory', os.path.dirname(found_file))
-				sett.endGroup()
-				sett.endGroup()
+		file_path = os.path.join(geometries_folder, filename)
 
-				# Import geometria tramite dialog
-				App.runCommand("ImportGeometry")
+		# Imposta path nelle QSettings
+		sett = QSettings()
+		sett.beginGroup('FileDialogManager')
+		sett.beginGroup('LD_ImpGeom')
+		sett.setValue('LastDirectory', file_path)
+		sett.endGroup()
+		sett.endGroup()
 
-				import_count += 1
-				print(f"    ✓ Importata da: {found_file}")
-
-			except Exception as e:
-				import_errors += 1
-				print(f"    ✗ Errore import: {str(e)}")
-		else:
-			import_errors += 1
-			print(f"    ✗ File non trovato: {geometry_path}.*")
+		# Esegui comando import (apre dialog STKO)
+		App.runCommand('ImportGeometry')
 
 		App.processEvents()
 
-	print(f"\n✓ Geometrie importate: {import_count}/{len(geometries_data)}")
-	if import_errors > 0:
-		print(f"✗ Errori import: {import_errors}")
+	print("\n" + "="*80)
+	print(f"✓ Import completato: {numero_file} geometrie importate")
+	print("="*80)
 
 	# RICREA PROPRIETÀ (senza ancora assegnarle)
 	print("\n[FASE 3] Ricreazione Proprietà")
@@ -696,13 +688,15 @@ def run_copy_mode():
 					created_element_props[prop_name] = ep
 
 	print("\n" + "="*80)
-	print("IMPORT COMPLETATO!")
-	print(f"Geometrie importate: {import_count}")
+	print("IMPORT E RICREAZIONE COMPLETATI!")
+	print(f"Geometrie importate: {numero_file}")
 	print(f"Physical Properties create: {len(created_physical_props)}")
 	print(f"Element Properties create: {len(created_element_props)}")
 	print("\n💡 PROSSIMO STEP:")
 	print("   Implementare coordinate matching per assegnare proprietà")
 	print("="*80)
+
+	doc.dirty = True
 
 # ==============================================================================
 # ESECUZIONE
