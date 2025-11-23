@@ -209,6 +209,115 @@ def extract_property_data(prop, prop_type):
 
 	return prop_data
 
+def extract_interaction_data(interaction_id, interaction):
+	"""Estrae i dati di un'interazione tra geometrie"""
+	interaction_data = {
+		'id': interaction_id,
+		'name': interaction.name,
+		'type': None,
+		'physical_property': None,
+		'element_property': None,
+		'masters': [],
+		'slaves': [],
+		'errors': []
+	}
+
+	try:
+		# Tipo di interazione
+		if hasattr(interaction, 'type'):
+			interaction_data['type'] = str(interaction.type)
+
+		# Physical Property associata
+		if hasattr(interaction, 'physicalProperty') and interaction.physicalProperty:
+			interaction_data['physical_property'] = {
+				'property_id': interaction.physicalProperty.id,
+				'property_name': interaction.physicalProperty.name
+			}
+
+		# Element Property associata
+		if hasattr(interaction, 'elementProperty') and interaction.elementProperty:
+			interaction_data['element_property'] = {
+				'property_id': interaction.elementProperty.id,
+				'property_name': interaction.elementProperty.name
+			}
+
+		# Estrai MASTERS
+		if hasattr(interaction.items, 'masters'):
+			for master in interaction.items.masters:
+				try:
+					master_geom = master.geometry
+					master_data = {
+						'geometry_id': master_geom.id,
+						'geometry_name': master_geom.name,
+						'subshape_id': master.subshapeId,
+						'subshape_type': get_shape_type_name(master.subshapeType),
+						'vertex_coordinates': []
+					}
+
+					# Estrai coordinate dei vertici per matching
+					try:
+						shape = master_geom.shape
+						if master.subshapeType == TopAbs_ShapeEnum.TopAbs_VERTEX:
+							# È un vertice singolo
+							master_data['vertex_coordinates'] = [extract_vertex_coordinates(shape, master.subshapeId)]
+						else:
+							# Estrai vertici della subshape
+							vertices = shape.getSubshapeChildren(
+								master.subshapeId,
+								master.subshapeType,
+								MpcSubshapeType.Vertex
+							)
+							master_data['vertex_coordinates'] = [
+								extract_vertex_coordinates(shape, v_id) for v_id in vertices
+							]
+					except Exception as e:
+						interaction_data['errors'].append(f"Errore estrazione coordinate master: {str(e)}")
+
+					interaction_data['masters'].append(master_data)
+				except Exception as e:
+					interaction_data['errors'].append(f"Errore analisi master: {str(e)}")
+
+		# Estrai SLAVES
+		if hasattr(interaction.items, 'slaves'):
+			for slave in interaction.items.slaves:
+				try:
+					slave_geom = slave.geometry
+					slave_data = {
+						'geometry_id': slave_geom.id,
+						'geometry_name': slave_geom.name,
+						'subshape_id': slave.subshapeId,
+						'subshape_type': get_shape_type_name(slave.subshapeType),
+						'vertex_coordinates': []
+					}
+
+					# Estrai coordinate dei vertici per matching
+					try:
+						shape = slave_geom.shape
+						if slave.subshapeType == TopAbs_ShapeEnum.TopAbs_VERTEX:
+							# È un vertice singolo
+							slave_data['vertex_coordinates'] = [extract_vertex_coordinates(shape, slave.subshapeId)]
+						else:
+							# Estrai vertici della subshape
+							vertices = shape.getSubshapeChildren(
+								slave.subshapeId,
+								slave.subshapeType,
+								MpcSubshapeType.Vertex
+							)
+							slave_data['vertex_coordinates'] = [
+								extract_vertex_coordinates(shape, v_id) for v_id in vertices
+							]
+					except Exception as e:
+						interaction_data['errors'].append(f"Errore estrazione coordinate slave: {str(e)}")
+
+					interaction_data['slaves'].append(slave_data)
+				except Exception as e:
+					interaction_data['errors'].append(f"Errore analisi slave: {str(e)}")
+
+	except Exception as e:
+		interaction_data['errors'].append(f"Errore generale: {str(e)}")
+
+	return interaction_data
+
 def analyze_geometry_comprehensive(geom_id, geom):
 	"""Analizza in modo completo una singola geometria"""
 
@@ -459,7 +568,9 @@ def run_analyze_mode():
 	all_geometries_data = {
 		'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
 		'total_geometries': len(doc.geometries),
-		'geometries': []
+		'total_interactions': len(doc.interactions),
+		'geometries': [],
+		'interactions': []
 	}
 
 	# Analizza ogni geometria
@@ -468,6 +579,19 @@ def run_analyze_mode():
 
 		geom_data = analyze_geometry_comprehensive(geom_id, geom)
 		all_geometries_data['geometries'].append(geom_data)
+
+		App.processEvents()
+
+	# Analizza le interazioni
+	print("\n[ANALISI INTERAZIONI]")
+	print(f"Totale interazioni: {len(doc.interactions)}")
+	print("-"*80)
+
+	for idx, (int_id, interaction) in enumerate(doc.interactions.items(), 1):
+		print(f"  [{idx}/{len(doc.interactions)}] Analizzando interazione: [{int_id}] {interaction.name}")
+
+		int_data = extract_interaction_data(int_id, interaction)
+		all_geometries_data['interactions'].append(int_data)
 
 		App.processEvents()
 
@@ -537,6 +661,7 @@ def run_analyze_mode():
 	print("\n" + "="*80)
 	print("ANALISI COMPLETATA!")
 	print(f"Geometrie analizzate: {all_geometries_data['total_geometries']}")
+	print(f"Interazioni analizzate: {all_geometries_data['total_interactions']}")
 	print(f"File salvati in: {output_folder}/")
 	print("="*80)
 
@@ -698,6 +823,38 @@ def find_matching_subgeometry_index(shape, geom_data, subgeom_type):
 
 		if match:
 			return idx
+
+	return None
+
+def get_shape_type_from_name(shape_type_name):
+	"""Converte il nome del tipo di shape in enum"""
+	type_map = {
+		"VERTEX": TopAbs_ShapeEnum.TopAbs_VERTEX,
+		"EDGE": TopAbs_ShapeEnum.TopAbs_EDGE,
+		"WIRE": TopAbs_ShapeEnum.TopAbs_WIRE,
+		"FACE": TopAbs_ShapeEnum.TopAbs_FACE,
+		"SHELL": TopAbs_ShapeEnum.TopAbs_SHELL,
+		"SOLID": TopAbs_ShapeEnum.TopAbs_SOLID,
+		"COMPSOLID": TopAbs_ShapeEnum.TopAbs_COMPSOLID,
+		"COMPOUND": TopAbs_ShapeEnum.TopAbs_COMPOUND,
+	}
+	return type_map.get(shape_type_name)
+
+def find_subshape_by_coordinates(shape, target_coords, subshape_type_name):
+	"""Trova la subshape con le coordinate specificate"""
+	subshape_type = get_shape_type_from_name(subshape_type_name)
+	if not subshape_type:
+		return None
+
+	if subshape_type == TopAbs_ShapeEnum.TopAbs_VERTEX:
+		# Per i vertici, cerca direttamente
+		return find_vertex_by_coordinates(shape, target_coords[0] if target_coords else None)
+	elif subshape_type == TopAbs_ShapeEnum.TopAbs_EDGE:
+		return find_edge_by_vertices(shape, target_coords)
+	elif subshape_type == TopAbs_ShapeEnum.TopAbs_FACE:
+		return find_face_by_vertices(shape, target_coords)
+	elif subshape_type == TopAbs_ShapeEnum.TopAbs_SOLID:
+		return find_solid_by_vertices(shape, target_coords)
 
 	return None
 
@@ -1012,6 +1169,162 @@ def assign_properties_to_geometries(geometries_data, created_physical_props, cre
 
 	return assigned_count, failed_count
 
+def recreate_interactions(interactions_data, created_physical_props, created_element_props):
+	"""Ricrea le interazioni salvate nel JSON"""
+	print("\n[FASE 5] Ricreazione Interazioni")
+	print("-"*80)
+
+	if not interactions_data:
+		print("✓ Nessuna interazione da ricreare")
+		return 0, 0
+
+	created_count = 0
+	failed_count = 0
+
+	for int_data in interactions_data:
+		print(f"\n  Ricreando interazione: {int_data['name']}")
+
+		try:
+			# Trova o crea l'interazione
+			interaction = None
+			interaction_id = None
+
+			# Cerca se esiste già un'interazione con lo stesso nome
+			for k, existing_int in doc.interactions.items():
+				if existing_int.name == int_data['name']:
+					interaction = existing_int
+					interaction_id = k
+					print(f"    ✓ Usando interazione esistente: {int_data['name']}")
+					break
+
+			# Se non esiste, creane una nuova
+			if not interaction:
+				# Crea nuova interazione
+				interaction = MpcInteraction()
+				interaction_id = doc.interactions.getlastkey(0) + 1
+				interaction.id = interaction_id
+				interaction.name = int_data['name']
+
+				# Imposta proprietà fisiche/elemento se presenti
+				if int_data['physical_property']:
+					prop_name = int_data['physical_property']['property_name']
+					if prop_name in created_physical_props:
+						interaction.physicalProperty = created_physical_props[prop_name]
+						print(f"    ✓ Physical Property: {prop_name}")
+
+				if int_data['element_property']:
+					prop_name = int_data['element_property']['property_name']
+					if prop_name in created_element_props:
+						interaction.elementProperty = created_element_props[prop_name]
+						print(f"    ✓ Element Property: {prop_name}")
+
+				# Aggiungi l'interazione al documento
+				doc.addInteraction(interaction)
+				print(f"    ✓ Interazione creata: {int_data['name']} [ID: {interaction_id}]")
+
+			# Ricrea MASTERS
+			masters_added = 0
+			for master_data in int_data['masters']:
+				try:
+					# Trova la geometria corrispondente per nome
+					target_geom = None
+					for geom_id, geom in doc.geometries.items():
+						if geom.name == master_data['geometry_name'] or master_data['geometry_name'] in geom.name:
+							target_geom = geom
+							break
+
+					if not target_geom:
+						print(f"    ✗ Geometria master non trovata: {master_data['geometry_name']}")
+						failed_count += 1
+						continue
+
+					# Trova la subshape tramite coordinate matching
+					subshape_id = find_subshape_by_coordinates(
+						target_geom.shape,
+						master_data['vertex_coordinates'],
+						master_data['subshape_type']
+					)
+
+					if subshape_id is None:
+						print(f"    ✗ Subshape master non trovata: {master_data['subshape_type']}")
+						failed_count += 1
+						continue
+
+					# Crea l'item master
+					master_item = MpcInteractionGeometryItem()
+					master_item.geometry = target_geom
+					master_item.subshapeId = subshape_id
+					master_item.subshapeType = get_shape_type_from_name(master_data['subshape_type'])
+
+					# Aggiungi ai masters
+					interaction.items.masters.append(master_item)
+					masters_added += 1
+
+				except Exception as e:
+					print(f"    ✗ Errore creazione master: {str(e)}")
+					failed_count += 1
+
+			print(f"    ✓ Masters aggiunti: {masters_added}/{len(int_data['masters'])}")
+
+			# Ricrea SLAVES
+			slaves_added = 0
+			for slave_data in int_data['slaves']:
+				try:
+					# Trova la geometria corrispondente per nome
+					target_geom = None
+					for geom_id, geom in doc.geometries.items():
+						if geom.name == slave_data['geometry_name'] or slave_data['geometry_name'] in geom.name:
+							target_geom = geom
+							break
+
+					if not target_geom:
+						print(f"    ✗ Geometria slave non trovata: {slave_data['geometry_name']}")
+						failed_count += 1
+						continue
+
+					# Trova la subshape tramite coordinate matching
+					subshape_id = find_subshape_by_coordinates(
+						target_geom.shape,
+						slave_data['vertex_coordinates'],
+						slave_data['subshape_type']
+					)
+
+					if subshape_id is None:
+						print(f"    ✗ Subshape slave non trovata: {slave_data['subshape_type']}")
+						failed_count += 1
+						continue
+
+					# Crea l'item slave
+					slave_item = MpcInteractionGeometryItem()
+					slave_item.geometry = target_geom
+					slave_item.subshapeId = subshape_id
+					slave_item.subshapeType = get_shape_type_from_name(slave_data['subshape_type'])
+
+					# Aggiungi agli slaves
+					interaction.items.slaves.append(slave_item)
+					slaves_added += 1
+
+				except Exception as e:
+					print(f"    ✗ Errore creazione slave: {str(e)}")
+					failed_count += 1
+
+			print(f"    ✓ Slaves aggiunti: {slaves_added}/{len(int_data['slaves'])}")
+
+			# Commit delle modifiche
+			doc.commitChanges()
+			created_count += 1
+
+		except Exception as e:
+			print(f"    ✗ Errore ricreazione interazione: {str(e)}")
+			failed_count += 1
+
+	print("\n" + "-"*80)
+	print(f"✓ Interazioni ricreate: {created_count}/{len(interactions_data)}")
+	if failed_count > 0:
+		print(f"✗ Errori durante la ricreazione: {failed_count}")
+
+	return created_count, failed_count
+
 # ==============================================================================
 # MODALITÀ COPY
 # ==============================================================================
@@ -1258,12 +1571,19 @@ def run_copy_mode():
 	# ASSEGNA PROPRIETÀ TRAMITE COORDINATE MATCHING
 	assigned, failed = assign_properties_to_geometries(geometries_data, created_physical_props, created_element_props)
 
+	# RICREA INTERAZIONI
+	interactions_data = json_data.get('interactions', [])
+	interactions_created, interactions_failed = recreate_interactions(interactions_data, created_physical_props, created_element_props)
+
 	print("\n" + "="*80)
 	print("🎉 COPY COMPLETATO!")
 	print(f"Geometrie importate: {numero_file}")
 	print(f"Proprietà assegnate: {assigned}")
 	if failed > 0:
 		print(f"⚠️  Assegnazioni fallite: {failed}")
+	print(f"Interazioni ricreate: {interactions_created}/{len(interactions_data)}")
+	if interactions_failed > 0:
+		print(f"⚠️  Errori interazioni: {interactions_failed}")
 	print("="*80)
 
 	doc.dirty = True
