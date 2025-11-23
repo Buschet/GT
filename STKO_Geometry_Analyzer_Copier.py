@@ -223,9 +223,13 @@ def extract_interaction_data(interaction_id, interaction):
 	}
 
 	try:
-		# Tipo di interazione
+		# Tipo di interazione - salva come stringa per compatibilità JSON
 		if hasattr(interaction, 'type'):
-			interaction_data['type'] = str(interaction.type)
+			try:
+				# Converte l'enum in stringa
+				interaction_data['type'] = str(interaction.type)
+			except:
+				interaction_data['type'] = 'NodeToNode'  # Default
 
 		# Physical Property associata
 		if hasattr(interaction, 'physicalProperty') and interaction.physicalProperty:
@@ -840,6 +844,26 @@ def get_shape_type_from_name(shape_type_name):
 	}
 	return type_map.get(shape_type_name)
 
+def get_interaction_type_from_string(type_string):
+	"""Converte la stringa del tipo di interazione in enum MpcInteractionType"""
+	if not type_string:
+		return MpcInteractionType.NodeToNode  # Default
+
+	# Estrai il nome del tipo dalla stringa (es. "MpcInteractionType.NodeToNode" -> "NodeToNode")
+	if '.' in type_string:
+		type_name = type_string.split('.')[-1]
+	else:
+		type_name = type_string
+
+	# Mappa dei tipi disponibili
+	type_map = {
+		'NodeToNode': MpcInteractionType.NodeToNode,
+		'SurfaceToSurface': MpcInteractionType.SurfaceToSurface,
+		'BeamToBeam': MpcInteractionType.BeamToBeam,
+	}
+
+	return type_map.get(type_name, MpcInteractionType.NodeToNode)
+
 def find_subshape_by_coordinates(shape, target_coords, subshape_type_name):
 	"""Trova la subshape con le coordinate specificate"""
 	subshape_type = get_shape_type_from_name(subshape_type_name)
@@ -1199,11 +1223,12 @@ def recreate_interactions(interactions_data, created_physical_props, created_ele
 
 			# Se non esiste, creane una nuova
 			if not interaction:
-				# Crea nuova interazione
-				interaction = MpcInteraction()
+				# Crea nuova interazione con costruttore corretto
 				interaction_id = doc.interactions.getlastkey(0) + 1
-				interaction.id = interaction_id
-				interaction.name = int_data['name']
+				interaction = MpcInteraction(interaction_id, int_data['name'])
+
+				# Imposta tipo di interazione dal JSON
+				interaction.type = get_interaction_type_from_string(int_data.get('type'))
 
 				# Imposta proprietà fisiche/elemento se presenti
 				if int_data['physical_property']:
@@ -1250,11 +1275,9 @@ def recreate_interactions(interactions_data, created_physical_props, created_ele
 						failed_count += 1
 						continue
 
-					# Crea l'item master
-					master_item = MpcInteractionGeometryItem()
-					master_item.geometry = target_geom
-					master_item.subshapeId = subshape_id
-					master_item.subshapeType = get_shape_type_from_name(master_data['subshape_type'])
+					# Crea l'item master con costruttore corretto
+					subshape_type = get_shape_type_from_name(master_data['subshape_type'])
+					master_item = MpcInteractionItem(target_geom, subshape_type, subshape_id)
 
 					# Aggiungi ai masters
 					interaction.items.masters.append(master_item)
@@ -1294,11 +1317,9 @@ def recreate_interactions(interactions_data, created_physical_props, created_ele
 						failed_count += 1
 						continue
 
-					# Crea l'item slave
-					slave_item = MpcInteractionGeometryItem()
-					slave_item.geometry = target_geom
-					slave_item.subshapeId = subshape_id
-					slave_item.subshapeType = get_shape_type_from_name(slave_data['subshape_type'])
+					# Crea l'item slave con costruttore corretto
+					subshape_type = get_shape_type_from_name(slave_data['subshape_type'])
+					slave_item = MpcInteractionItem(target_geom, subshape_type, subshape_id)
 
 					# Aggiungi agli slaves
 					interaction.items.slaves.append(slave_item)
