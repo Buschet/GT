@@ -156,7 +156,7 @@ def extract_property_data(prop, prop_type):
 
 	try:
 		if prop.XObject:
-			prop_data['property_type'] = prop.XObject.getXObjectName()
+			prop_data['property_type'] = prop.XObject.completeName
 
 			xobj = prop.XObject
 			# Usa .items() per iterare sugli attributi
