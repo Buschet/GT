@@ -322,6 +322,109 @@ def extract_interaction_data(interaction_id, interaction):
 
 	return interaction_data
 
+def extract_condition_data(condition_id, condition):
+	"""Estrae i dati di una condizione applicata alle geometrie"""
+	condition_data = {
+		'id': condition_id,
+		'name': condition.name,
+		'condition_type': None,
+		'parameters': {},
+		'assignments': [],
+		'errors': []
+	}
+
+	try:
+		# Tipo di condizione
+		if hasattr(condition, 'XObject') and condition.XObject:
+			condition_data['condition_type'] = condition.XObject.completeName
+
+			# Estrai tutti i parametri dell'XObject
+			xobj = condition.XObject
+			for attr_name, attr in xobj.attributes.items():
+				try:
+					condition_data['parameters'][attr_name] = extract_attribute_value(attr)
+				except:
+					pass
+
+		# Estrai le assegnazioni alle geometrie
+		if hasattr(condition, 'assignment') and hasattr(condition.assignment, 'geometries'):
+			ass = condition.assignment.geometries
+
+			for geom in ass.keys():
+				geom_assignment = {
+					'geometry_id': geom.id,
+					'geometry_name': geom.name,
+					'solids': [],
+					'faces': [],
+					'edges': [],
+					'vertices': []
+				}
+
+				# Estrai SOLIDS con coordinate
+				solids = ass[geom].solids
+				for solid_id in solids:
+					try:
+						shape = geom.shape
+						vertices = shape.getSubshapeChildren(solid_id, MpcSubshapeType.Solid, MpcSubshapeType.Vertex)
+						vertex_coords = [extract_vertex_coordinates(shape, v_id) for v_id in vertices]
+						geom_assignment['solids'].append({
+							'subshape_id': solid_id,
+							'vertex_coordinates': vertex_coords
+						})
+					except Exception as e:
+						condition_data['errors'].append(f"Errore estrazione solid {solid_id}: {str(e)}")
+
+				# Estrai FACES con coordinate
+				faces = ass[geom].faces
+				for face_id in faces:
+					try:
+						shape = geom.shape
+						vertices = shape.getSubshapeChildren(face_id, MpcSubshapeType.Face, MpcSubshapeType.Vertex)
+						vertex_coords = [extract_vertex_coordinates(shape, v_id) for v_id in vertices]
+						geom_assignment['faces'].append({
+							'subshape_id': face_id,
+							'vertex_coordinates': vertex_coords
+						})
+					except Exception as e:
+						condition_data['errors'].append(f"Errore estrazione face {face_id}: {str(e)}")
+
+				# Estrai EDGES con coordinate
+				edges = ass[geom].edges
+				for edge_id in edges:
+					try:
+						shape = geom.shape
+						vertices = shape.getSubshapeChildren(edge_id, MpcSubshapeType.Edge, MpcSubshapeType.Vertex)
+						vertex_coords = [extract_vertex_coordinates(shape, v_id) for v_id in vertices]
+						geom_assignment['edges'].append({
+							'subshape_id': edge_id,
+							'vertex_coordinates': vertex_coords
+						})
+					except Exception as e:
+						condition_data['errors'].append(f"Errore estrazione edge {edge_id}: {str(e)}")
+
+				# Estrai VERTICES con coordinate
+				vertices_list = ass[geom].vertices
+				for vertex_id in vertices_list:
+					try:
+						shape = geom.shape
+						vertex_coords = extract_vertex_coordinates(shape, vertex_id)
+						geom_assignment['vertices'].append({
+							'subshape_id': vertex_id,
+							'vertex_coordinates': [vertex_coords]
+						})
+					except Exception as e:
+						condition_data['errors'].append(f"Errore estrazione vertex {vertex_id}: {str(e)}")
+
+				# Aggiungi assignment solo se ha almeno una subshape
+				if (geom_assignment['solids'] or geom_assignment['faces'] or
+				    geom_assignment['edges'] or geom_assignment['vertices']):
+					condition_data['assignments'].append(geom_assignment)
+
+	except Exception as e:
+		condition_data['errors'].append(f"Errore generale: {str(e)}")
+
+	return condition_data
+
 def analyze_geometry_comprehensive(geom_id, geom):
 	"""Analizza in modo completo una singola geometria"""
 
@@ -573,8 +676,10 @@ def run_analyze_mode():
 		'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
 		'total_geometries': len(doc.geometries),
 		'total_interactions': len(doc.interactions),
+		'total_conditions': len(doc.conditions),
 		'geometries': [],
-		'interactions': []
+		'interactions': [],
+		'conditions': []
 	}
 
 	# Analizza ogni geometria
@@ -596,6 +701,19 @@ def run_analyze_mode():
 
 		int_data = extract_interaction_data(int_id, interaction)
 		all_geometries_data['interactions'].append(int_data)
+
+		App.processEvents()
+
+	# Analizza le condizioni
+	print("\n[ANALISI CONDIZIONI]")
+	print(f"Totale condizioni: {len(doc.conditions)}")
+	print("-"*80)
+
+	for idx, (cond_id, condition) in enumerate(doc.conditions.items(), 1):
+		print(f"  [{idx}/{len(doc.conditions)}] Analizzando condizione: [{cond_id}] {condition.name}")
+
+		cond_data = extract_condition_data(cond_id, condition)
+		all_geometries_data['conditions'].append(cond_data)
 
 		App.processEvents()
 
@@ -666,6 +784,7 @@ def run_analyze_mode():
 	print("ANALISI COMPLETATA!")
 	print(f"Geometrie analizzate: {all_geometries_data['total_geometries']}")
 	print(f"Interazioni analizzate: {all_geometries_data['total_interactions']}")
+	print(f"Condizioni analizzate: {all_geometries_data['total_conditions']}")
 	print(f"File salvati in: {output_folder}/")
 	print("="*80)
 
@@ -1388,6 +1507,172 @@ def recreate_interactions(interactions_data, created_physical_props, created_ele
 
 	return created_count, failed_count
 
+def recreate_conditions(conditions_data):
+	"""Ricrea le condizioni salvate nel JSON"""
+	print("\n[FASE 6] Ricreazione Condizioni")
+	print("-"*80)
+
+	if not conditions_data:
+		print("✓ Nessuna condizione da ricreare")
+		return 0, 0
+
+	created_count = 0
+	failed_count = 0
+	assigned_count = 0
+
+	for cond_data in conditions_data:
+		print(f"\n  Ricreando condizione: {cond_data['name']}")
+
+		try:
+			# Trova o crea la condizione
+			condition = None
+			condition_id = None
+
+			# Cerca se esiste già una condizione con lo stesso nome
+			for k, existing_cond in doc.conditions.items():
+				if existing_cond.name == cond_data['name']:
+					condition = existing_cond
+					condition_id = k
+					print(f"    ✓ Usando condizione esistente: {cond_data['name']}")
+					break
+
+			# Se non esiste, creane una nuova
+			if not condition:
+				# Crea metadata e XObject
+				cond_type = cond_data['condition_type']
+				print(f"    Tipo condizione: {cond_type}")
+
+				cond_meta = doc.metaDataCondition(cond_type)
+				cond_xobj = MpcXObject.createInstanceOf(cond_meta)
+
+				# Imposta parametri
+				if cond_data['parameters']:
+					for param_name, param_value in cond_data['parameters'].items():
+						try:
+							if param_name in cond_xobj.attributes:
+								attr = cond_xobj.attributes[param_name]
+								set_attribute_value(attr, param_value)
+								print(f"      - {param_name} = {param_value}")
+						except Exception as e:
+							print(f"      [WARNING] Errore parametro {param_name}: {str(e)}")
+
+				# Crea condizione
+				condition = MpcCondition()
+				condition_id = doc.conditions.getlastkey(0) + 1
+				condition.id = condition_id
+				condition.name = cond_data['name']
+				condition.XObject = cond_xobj
+
+				doc.addCondition(condition)
+				doc.commitChanges()
+				print(f"    ✓ Condizione creata: {cond_data['name']} [ID: {condition_id}]")
+				created_count += 1
+
+			# Ricrea le assegnazioni
+			for assignment in cond_data['assignments']:
+				print(f"\n    Assegnando a geometria: {assignment['geometry_name']}")
+
+				# Trova TUTTE le geometrie con nome simile
+				candidate_geoms = []
+				for geom_id, geom in doc.geometries.items():
+					if geom.name == assignment['geometry_name'] or assignment['geometry_name'] in geom.name:
+						candidate_geoms.append(geom)
+
+				if not candidate_geoms:
+					print(f"      ✗ Geometria non trovata: {assignment['geometry_name']}")
+					failed_count += 1
+					continue
+
+				# Crea subset per l'assegnazione
+				subset = MpcConditionIndexedSubSet()
+				found_geom = None
+				solids_added = 0
+				faces_added = 0
+				edges_added = 0
+				vertices_added = 0
+
+				# Processa SOLIDS
+				for solid_data in assignment['solids']:
+					for geom in candidate_geoms:
+						found_id = find_subshape_by_coordinates(
+							geom.shape,
+							solid_data['vertex_coordinates'],
+							'SOLID'
+						)
+						if found_id is not None:
+							subset.solids.append(found_id)
+							found_geom = geom
+							solids_added += 1
+							break
+
+				# Processa FACES
+				for face_data in assignment['faces']:
+					for geom in candidate_geoms:
+						found_id = find_subshape_by_coordinates(
+							geom.shape,
+							face_data['vertex_coordinates'],
+							'FACE'
+						)
+						if found_id is not None:
+							subset.faces.append(found_id)
+							found_geom = geom
+							faces_added += 1
+							break
+
+				# Processa EDGES
+				for edge_data in assignment['edges']:
+					for geom in candidate_geoms:
+						found_id = find_subshape_by_coordinates(
+							geom.shape,
+							edge_data['vertex_coordinates'],
+							'EDGE'
+						)
+						if found_id is not None:
+							subset.edges.append(found_id)
+							found_geom = geom
+							edges_added += 1
+							break
+
+				# Processa VERTICES
+				for vertex_data in assignment['vertices']:
+					for geom in candidate_geoms:
+						found_id = find_subshape_by_coordinates(
+							geom.shape,
+							vertex_data['vertex_coordinates'],
+							'VERTEX'
+						)
+						if found_id is not None:
+							subset.vertices.append(found_id)
+							found_geom = geom
+							vertices_added += 1
+							break
+
+				# Assegna la condizione alla geometria se almeno una subshape è stata trovata
+				if found_geom and (subset.solids or subset.faces or subset.edges or subset.vertices):
+					try:
+						condition.assignTo(found_geom, subset)
+						doc.commitChanges()
+						assigned_count += 1
+						print(f"      ✓ Assegnato a {found_geom.name}: {solids_added} solids, {faces_added} faces, {edges_added} edges, {vertices_added} vertices")
+					except Exception as e:
+						print(f"      ✗ Errore assegnazione: {str(e)}")
+						failed_count += 1
+				else:
+					print(f"      ✗ Nessuna subshape trovata per questa geometria")
+					failed_count += 1
+
+		except Exception as e:
+			print(f"    ✗ Errore ricreazione condizione: {str(e)}")
+			failed_count += 1
+
+	print("\n" + "-"*80)
+	print(f"✓ Condizioni ricreate: {created_count}/{len(conditions_data)}")
+	print(f"✓ Assegnazioni completate: {assigned_count}")
+	if failed_count > 0:
+		print(f"✗ Errori durante la ricreazione: {failed_count}")
+
+	return created_count, failed_count
+
 # ==============================================================================
 # MODALITÀ COPY
 # ==============================================================================
@@ -1638,6 +1923,10 @@ def run_copy_mode():
 	interactions_data = json_data.get('interactions', [])
 	interactions_created, interactions_failed = recreate_interactions(interactions_data, created_physical_props, created_element_props)
 
+	# RICREA CONDIZIONI
+	conditions_data = json_data.get('conditions', [])
+	conditions_created, conditions_failed = recreate_conditions(conditions_data)
+
 	print("\n" + "="*80)
 	print("🎉 COPY COMPLETATO!")
 	print(f"Geometrie importate: {numero_file}")
@@ -1647,6 +1936,9 @@ def run_copy_mode():
 	print(f"Interazioni ricreate: {interactions_created}/{len(interactions_data)}")
 	if interactions_failed > 0:
 		print(f"⚠️  Errori interazioni: {interactions_failed}")
+	print(f"Condizioni ricreate: {conditions_created}/{len(conditions_data)}")
+	if conditions_failed > 0:
+		print(f"⚠️  Errori condizioni: {conditions_failed}")
 	print("="*80)
 
 	doc.dirty = True
