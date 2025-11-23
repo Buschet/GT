@@ -624,20 +624,38 @@ def assign_properties_to_geometries(geometries_data, created_physical_props, cre
 
 	# Per ogni geometria nel documento corrente
 	for geom_id, geom in doc.geometries.items():
-		# Cerca la geometria corrispondente nel JSON (matching per nome flessibile)
+		# Cerca la geometria corrispondente nel JSON (matching per nome flessibile e specifico)
 		geom_data = None
-		for gd in geometries_data:
-			# Cerca il nome del JSON all'interno del nome della geometria importata
-			# Es: JSON="Wall_1" matcha con geom.name="geom_1_Wall_1" o "Wall_1.stp"
-			if gd['name'] in geom.name or geom.name in gd['name']:
-				geom_data = gd
-				print(f"\n  Match trovato: '{geom.name}' ↔ '{gd['name']}'")
-				break
+		best_match_score = 0
 
-		if not geom_data:
+		for gd in geometries_data:
+			json_name = gd['name']
+			imported_name = geom.name
+
+			# Calcola score di matching (più alto = migliore)
+			match_score = 0
+
+			# Match esatto ha priorità massima
+			if json_name == imported_name:
+				match_score = 100
+			# Nome JSON completamente contenuto nel nome importato
+			elif json_name in imported_name:
+				# Dai più punti se il match è più lungo
+				match_score = 50 + len(json_name)
+			# Nome importato completamente contenuto nel JSON
+			elif imported_name in json_name:
+				match_score = 30 + len(imported_name)
+
+			# Se questo match è migliore del precedente, usalo
+			if match_score > best_match_score:
+				best_match_score = match_score
+				geom_data = gd
+
+		if not geom_data or best_match_score == 0:
 			print(f"\n  [SKIP] Geometria '{geom.name}' non trovata nel JSON")
 			continue
 
+		print(f"\n  Match trovato: '{geom.name}' ↔ '{geom_data['name']}' (score: {best_match_score})")
 		print(f"  Assegnando proprietà a: {geom.name}")
 		shape = geom.shape
 
