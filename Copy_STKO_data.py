@@ -564,18 +564,21 @@ def assign_properties_to_geometries(geometries_data, created_physical_props, cre
 
 	# Per ogni geometria nel documento corrente
 	for geom_id, geom in doc.geometries.items():
-		# Cerca la geometria corrispondente nel JSON (matching per nome)
+		# Cerca la geometria corrispondente nel JSON (matching per nome flessibile)
 		geom_data = None
 		for gd in geometries_data:
-			if gd['name'] == geom.name:
+			# Cerca il nome del JSON all'interno del nome della geometria importata
+			# Es: JSON="Wall_1" matcha con geom.name="geom_1_Wall_1" o "Wall_1.stp"
+			if gd['name'] in geom.name or geom.name in gd['name']:
 				geom_data = gd
+				print(f"\n  Match trovato: '{geom.name}' ↔ '{gd['name']}'")
 				break
 
 		if not geom_data:
 			print(f"\n  [SKIP] Geometria '{geom.name}' non trovata nel JSON")
 			continue
 
-		print(f"\n  Assegnando proprietà a: {geom.name}")
+		print(f"  Assegnando proprietà a: {geom.name}")
 		shape = geom.shape
 
 		# ═══════════════════════════════════════════════════════════
