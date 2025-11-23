@@ -254,14 +254,14 @@ def extract_interaction_data(interaction_id, interaction):
 						'geometry_id': master_geom.id,
 						'geometry_name': master_geom.name,
 						'subshape_id': master.subshapeId,
-						'subshape_type': get_shape_type_name(master.subshapeType),
+						'subshape_type': get_mpc_subshape_type_name(master.subshapeType),
 						'vertex_coordinates': []
 					}
 
 					# Estrai coordinate dei vertici per matching
 					try:
 						shape = master_geom.shape
-						if master.subshapeType == TopAbs_ShapeEnum.TopAbs_VERTEX:
+						if master.subshapeType == MpcSubshapeType.Vertex:
 							# È un vertice singolo
 							master_data['vertex_coordinates'] = [extract_vertex_coordinates(shape, master.subshapeId)]
 						else:
@@ -290,14 +290,14 @@ def extract_interaction_data(interaction_id, interaction):
 						'geometry_id': slave_geom.id,
 						'geometry_name': slave_geom.name,
 						'subshape_id': slave.subshapeId,
-						'subshape_type': get_shape_type_name(slave.subshapeType),
+						'subshape_type': get_mpc_subshape_type_name(slave.subshapeType),
 						'vertex_coordinates': []
 					}
 
 					# Estrai coordinate dei vertici per matching
 					try:
 						shape = slave_geom.shape
-						if slave.subshapeType == TopAbs_ShapeEnum.TopAbs_VERTEX:
+						if slave.subshapeType == MpcSubshapeType.Vertex:
 							# È un vertice singolo
 							slave_data['vertex_coordinates'] = [extract_vertex_coordinates(shape, slave.subshapeId)]
 						else:
@@ -844,6 +844,26 @@ def get_shape_type_from_name(shape_type_name):
 	}
 	return type_map.get(shape_type_name)
 
+def get_mpc_subshape_type_name(mpc_subshape_type):
+	"""Converte MpcSubshapeType in nome stringa"""
+	type_map = {
+		MpcSubshapeType.Vertex: "VERTEX",
+		MpcSubshapeType.Edge: "EDGE",
+		MpcSubshapeType.Face: "FACE",
+		MpcSubshapeType.Solid: "SOLID",
+	}
+	return type_map.get(mpc_subshape_type, "UNKNOWN")
+
+def get_mpc_subshape_type_from_name(type_name):
+	"""Converte nome stringa in MpcSubshapeType"""
+	type_map = {
+		"VERTEX": MpcSubshapeType.Vertex,
+		"EDGE": MpcSubshapeType.Edge,
+		"FACE": MpcSubshapeType.Face,
+		"SOLID": MpcSubshapeType.Solid,
+	}
+	return type_map.get(type_name)
+
 def get_interaction_type_from_string(type_string):
 	"""Converte la stringa del tipo di interazione in enum MpcInteractionType"""
 	if not type_string:
@@ -865,18 +885,18 @@ def get_interaction_type_from_string(type_string):
 
 def find_subshape_by_coordinates(shape, target_coords, subshape_type_name):
 	"""Trova la subshape con le coordinate specificate"""
-	subshape_type = get_shape_type_from_name(subshape_type_name)
+	subshape_type = get_mpc_subshape_type_from_name(subshape_type_name)
 	if not subshape_type:
 		return None
 
-	if subshape_type == TopAbs_ShapeEnum.TopAbs_VERTEX:
+	if subshape_type == MpcSubshapeType.Vertex:
 		# Per i vertici, cerca direttamente
 		return find_vertex_by_coordinates(shape, target_coords[0] if target_coords else None)
-	elif subshape_type == TopAbs_ShapeEnum.TopAbs_EDGE:
+	elif subshape_type == MpcSubshapeType.Edge:
 		return find_edge_by_vertices(shape, target_coords)
-	elif subshape_type == TopAbs_ShapeEnum.TopAbs_FACE:
+	elif subshape_type == MpcSubshapeType.Face:
 		return find_face_by_vertices(shape, target_coords)
-	elif subshape_type == TopAbs_ShapeEnum.TopAbs_SOLID:
+	elif subshape_type == MpcSubshapeType.Solid:
 		return find_solid_by_vertices(shape, target_coords)
 
 	return None
@@ -1278,7 +1298,7 @@ def recreate_interactions(interactions_data, created_physical_props, created_ele
 						continue
 
 					# Crea l'item master con costruttore corretto
-					subshape_type = get_shape_type_from_name(master_data['subshape_type'])
+					subshape_type = get_mpc_subshape_type_from_name(master_data['subshape_type'])
 					master_item = MpcInteractionItem(target_geom, subshape_type, subshape_id)
 
 					# Aggiungi ai masters
@@ -1320,7 +1340,7 @@ def recreate_interactions(interactions_data, created_physical_props, created_ele
 						continue
 
 					# Crea l'item slave con costruttore corretto
-					subshape_type = get_shape_type_from_name(slave_data['subshape_type'])
+					subshape_type = get_mpc_subshape_type_from_name(slave_data['subshape_type'])
 					slave_item = MpcInteractionItem(target_geom, subshape_type, subshape_id)
 
 					# Aggiungi agli slaves
