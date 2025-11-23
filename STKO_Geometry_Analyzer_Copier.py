@@ -1273,27 +1273,36 @@ def recreate_interactions(interactions_data, created_physical_props, created_ele
 			masters_added = 0
 			for master_data in int_data['masters']:
 				try:
-					# Trova la geometria corrispondente per nome
-					target_geom = None
+					# Trova TUTTE le geometrie con nome simile (potrebbero essere divise)
+					candidate_geoms = []
 					for geom_id, geom in doc.geometries.items():
 						if geom.name == master_data['geometry_name'] or master_data['geometry_name'] in geom.name:
-							target_geom = geom
-							break
+							candidate_geoms.append(geom)
 
-					if not target_geom:
+					if not candidate_geoms:
 						print(f"    ✗ Geometria master non trovata: {master_data['geometry_name']}")
 						failed_count += 1
 						continue
 
-					# Trova la subshape tramite coordinate matching
-					subshape_id = find_subshape_by_coordinates(
-						target_geom.shape,
-						master_data['vertex_coordinates'],
-						master_data['subshape_type']
-					)
+					# Prova a trovare la subshape in ciascuna geometria candidata
+					target_geom = None
+					subshape_id = None
 
-					if subshape_id is None:
-						print(f"    ✗ Subshape master non trovata: {master_data['subshape_type']}")
+					for geom in candidate_geoms:
+						# Cerca la subshape tramite coordinate matching
+						found_id = find_subshape_by_coordinates(
+							geom.shape,
+							master_data['vertex_coordinates'],
+							master_data['subshape_type']
+						)
+
+						if found_id is not None:
+							target_geom = geom
+							subshape_id = found_id
+							break
+
+					if target_geom is None or subshape_id is None:
+						print(f"    ✗ Subshape master non trovata: {master_data['subshape_type']} in {master_data['geometry_name']}")
 						failed_count += 1
 						continue
 
@@ -1304,6 +1313,7 @@ def recreate_interactions(interactions_data, created_physical_props, created_ele
 					# Aggiungi ai masters
 					interaction.items.masters.append(master_item)
 					masters_added += 1
+					print(f"    ✓ Master aggiunto: {master_data['subshape_type']} da {target_geom.name}")
 
 				except Exception as e:
 					print(f"    ✗ Errore creazione master: {str(e)}")
@@ -1315,27 +1325,36 @@ def recreate_interactions(interactions_data, created_physical_props, created_ele
 			slaves_added = 0
 			for slave_data in int_data['slaves']:
 				try:
-					# Trova la geometria corrispondente per nome
-					target_geom = None
+					# Trova TUTTE le geometrie con nome simile (potrebbero essere divise)
+					candidate_geoms = []
 					for geom_id, geom in doc.geometries.items():
 						if geom.name == slave_data['geometry_name'] or slave_data['geometry_name'] in geom.name:
-							target_geom = geom
-							break
+							candidate_geoms.append(geom)
 
-					if not target_geom:
+					if not candidate_geoms:
 						print(f"    ✗ Geometria slave non trovata: {slave_data['geometry_name']}")
 						failed_count += 1
 						continue
 
-					# Trova la subshape tramite coordinate matching
-					subshape_id = find_subshape_by_coordinates(
-						target_geom.shape,
-						slave_data['vertex_coordinates'],
-						slave_data['subshape_type']
-					)
+					# Prova a trovare la subshape in ciascuna geometria candidata
+					target_geom = None
+					subshape_id = None
 
-					if subshape_id is None:
-						print(f"    ✗ Subshape slave non trovata: {slave_data['subshape_type']}")
+					for geom in candidate_geoms:
+						# Cerca la subshape tramite coordinate matching
+						found_id = find_subshape_by_coordinates(
+							geom.shape,
+							slave_data['vertex_coordinates'],
+							slave_data['subshape_type']
+						)
+
+						if found_id is not None:
+							target_geom = geom
+							subshape_id = found_id
+							break
+
+					if target_geom is None or subshape_id is None:
+						print(f"    ✗ Subshape slave non trovata: {slave_data['subshape_type']} in {slave_data['geometry_name']}")
 						failed_count += 1
 						continue
 
@@ -1346,6 +1365,7 @@ def recreate_interactions(interactions_data, created_physical_props, created_ele
 					# Aggiungi agli slaves
 					interaction.items.slaves.append(slave_item)
 					slaves_added += 1
+					print(f"    ✓ Slave aggiunto: {slave_data['subshape_type']} da {target_geom.name}")
 
 				except Exception as e:
 					print(f"    ✗ Errore creazione slave: {str(e)}")
