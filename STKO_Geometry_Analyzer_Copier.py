@@ -855,14 +855,13 @@ def get_interaction_type_from_string(type_string):
 	else:
 		type_name = type_string
 
-	# Mappa dei tipi disponibili
-	type_map = {
-		'NodeToNode': MpcInteractionType.NodeToNode,
-		'SurfaceToSurface': MpcInteractionType.SurfaceToSurface,
-		'BeamToBeam': MpcInteractionType.BeamToBeam,
-	}
-
-	return type_map.get(type_name, MpcInteractionType.NodeToNode)
+	# Prova a ottenere il tipo direttamente dall'enum usando getattr
+	try:
+		interaction_type = getattr(MpcInteractionType, type_name)
+		return interaction_type
+	except AttributeError:
+		print(f"    [WARNING] Tipo interazione '{type_name}' non trovato, uso NodeToNode come default")
+		return MpcInteractionType.NodeToNode
 
 def find_subshape_by_coordinates(shape, target_coords, subshape_type_name):
 	"""Trova la subshape con le coordinate specificate"""
@@ -1228,7 +1227,10 @@ def recreate_interactions(interactions_data, created_physical_props, created_ele
 				interaction = MpcInteraction(interaction_id, int_data['name'])
 
 				# Imposta tipo di interazione dal JSON
-				interaction.type = get_interaction_type_from_string(int_data.get('type'))
+				type_string = int_data.get('type')
+				print(f"    Tipo dal JSON: {type_string}")
+				interaction.type = get_interaction_type_from_string(type_string)
+				print(f"    Tipo impostato: {interaction.type}")
 
 				# Imposta proprietà fisiche/elemento se presenti
 				if int_data['physical_property']:
