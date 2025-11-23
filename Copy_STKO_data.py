@@ -454,6 +454,345 @@ def run_analyze_mode():
 	print("="*80)
 
 # ==============================================================================
+# COORDINATE MATCHING SYSTEM
+# ==============================================================================
+
+# Tolleranza per confronto coordinate (gestisce arrotondamenti numerici)
+COORD_TOLERANCE = 1e-6
+
+def coordinates_match(coord1, coord2, tolerance=COORD_TOLERANCE):
+	"""Confronta due coordinate con tolleranza"""
+	if coord1 is None or coord2 is None:
+		return False
+	if 'x' not in coord1 or 'x' not in coord2:
+		return False
+
+	return (abs(coord1['x'] - coord2['x']) < tolerance and
+	        abs(coord1['y'] - coord2['y']) < tolerance and
+	        abs(coord1['z'] - coord2['z']) < tolerance)
+
+def find_vertex_by_coordinates(shape, target_coords):
+	"""Trova l'ID del vertice con le coordinate specificate"""
+	num_vertices = shape.getNumberOfSubshapes(MpcSubshapeType.Vertex)
+
+	for v_id in range(num_vertices):
+		vertex_coords = extract_vertex_coordinates(shape, v_id)
+		if coordinates_match(vertex_coords, target_coords):
+			return v_id
+
+	return None
+
+def find_edge_by_vertices(shape, target_vertex_coords):
+	"""Trova l'ID dell'edge con i vertici specificati (confronto coordinate)"""
+	num_edges = shape.getNumberOfSubshapes(MpcSubshapeType.Edge)
+
+	for e_id in range(num_edges):
+		try:
+			# Ottieni vertici dell'edge
+			vertices = shape.getSubshapeChildren(e_id, MpcSubshapeType.Edge, MpcSubshapeType.Vertex)
+			edge_coords = [extract_vertex_coordinates(shape, v_id) for v_id in vertices]
+
+			# Confronta coordinate (l'ordine potrebbe essere invertito)
+			if len(edge_coords) == len(target_vertex_coords):
+				# Match diretto
+				match_direct = all(
+					any(coordinates_match(ec, tc) for tc in target_vertex_coords)
+					for ec in edge_coords
+				)
+				if match_direct:
+					return e_id
+		except:
+			pass
+
+	return None
+
+def find_face_by_vertices(shape, target_vertex_coords):
+	"""Trova l'ID della face con i vertici specificati (confronto coordinate)"""
+	num_faces = shape.getNumberOfSubshapes(MpcSubshapeType.Face)
+
+	for f_id in range(num_faces):
+		try:
+			# Ottieni vertici della face
+			vertices = shape.getSubshapeChildren(f_id, MpcSubshapeType.Face, MpcSubshapeType.Vertex)
+			face_coords = [extract_vertex_coordinates(shape, v_id) for v_id in vertices]
+
+			# Confronta coordinate
+			if len(face_coords) == len(target_vertex_coords):
+				# Tutti i vertici target devono matchare
+				match = all(
+					any(coordinates_match(fc, tc) for tc in target_vertex_coords)
+					for fc in face_coords
+				)
+				if match:
+					return f_id
+		except:
+			pass
+
+	return None
+
+def find_solid_by_vertices(shape, target_vertex_coords):
+	"""Trova l'ID del solid con i vertici specificati (confronto coordinate)"""
+	num_solids = shape.getNumberOfSubshapes(MpcSubshapeType.Solid)
+
+	for s_id in range(num_solids):
+		try:
+			# Ottieni vertici del solid
+			vertices = shape.getSubshapeChildren(s_id, MpcSubshapeType.Solid, MpcSubshapeType.Vertex)
+			solid_coords = [extract_vertex_coordinates(shape, v_id) for v_id in vertices]
+
+			# Confronta coordinate
+			if len(solid_coords) == len(target_vertex_coords):
+				# Tutti i vertici target devono matchare
+				match = all(
+					any(coordinates_match(sc, tc) for tc in target_vertex_coords)
+					for sc in solid_coords
+				)
+				if match:
+					return s_id
+		except:
+			pass
+
+	return None
+
+def assign_properties_to_geometries(geometries_data, created_physical_props, created_element_props):
+	"""Assegna le proprietà alle geometrie importate tramite coordinate matching"""
+	print("\n[FASE 4] Assegnazione Proprietà tramite Coordinate Matching")
+	print("-"*80)
+
+	assigned_count = 0
+	failed_count = 0
+
+	# Per ogni geometria nel documento corrente
+	for geom_id, geom in doc.geometries.items():
+		# Cerca la geometria corrispondente nel JSON (matching per nome)
+		geom_data = None
+		for gd in geometries_data:
+			if gd['name'] == geom.name:
+				geom_data = gd
+				break
+
+		if not geom_data:
+			print(f"\n  [SKIP] Geometria '{geom.name}' non trovata nel JSON")
+			continue
+
+		print(f"\n  Assegnando proprietà a: {geom.name}")
+		shape = geom.shape
+
+		# ═══════════════════════════════════════════════════════════
+		# PHYSICAL PROPERTIES - VERTICES
+		# ═══════════════════════════════════════════════════════════
+		for prop_data in geom_data['properties']['physical']['vertices']:
+			try:
+				target_coords = prop_data.get('coordinates')
+				if not target_coords:
+					continue
+
+				# Trova vertice con queste coordinate
+				v_id = find_vertex_by_coordinates(shape, target_coords)
+
+				if v_id is not None:
+					prop_name = prop_data['property_name']
+					if prop_name in created_physical_props:
+						pp = created_physical_props[prop_name]
+						geom.physicalPropertyAssignment.onVertices[v_id] = pp
+						assigned_count += 1
+						print(f"    ✓ Physical Property '{prop_name}' → Vertex {v_id}")
+				else:
+					failed_count += 1
+					print(f"    ✗ Vertex non trovato per {prop_data['property_name']}")
+			except Exception as e:
+				failed_count += 1
+				print(f"    ✗ Errore: {str(e)}")
+
+		# ═══════════════════════════════════════════════════════════
+		# PHYSICAL PROPERTIES - EDGES
+		# ═══════════════════════════════════════════════════════════
+		for prop_data in geom_data['properties']['physical']['edges']:
+			try:
+				target_coords = prop_data.get('vertex_coordinates', [])
+				if not target_coords:
+					continue
+
+				# Trova edge con questi vertici
+				e_id = find_edge_by_vertices(shape, target_coords)
+
+				if e_id is not None:
+					prop_name = prop_data['property_name']
+					if prop_name in created_physical_props:
+						pp = created_physical_props[prop_name]
+						geom.physicalPropertyAssignment.onEdges[e_id] = pp
+						assigned_count += 1
+						print(f"    ✓ Physical Property '{prop_name}' → Edge {e_id}")
+				else:
+					failed_count += 1
+					print(f"    ✗ Edge non trovato per {prop_data['property_name']}")
+			except Exception as e:
+				failed_count += 1
+				print(f"    ✗ Errore: {str(e)}")
+
+		# ═══════════════════════════════════════════════════════════
+		# PHYSICAL PROPERTIES - FACES
+		# ═══════════════════════════════════════════════════════════
+		for prop_data in geom_data['properties']['physical']['faces']:
+			try:
+				target_coords = prop_data.get('vertex_coordinates', [])
+				if not target_coords:
+					continue
+
+				# Trova face con questi vertici
+				f_id = find_face_by_vertices(shape, target_coords)
+
+				if f_id is not None:
+					prop_name = prop_data['property_name']
+					if prop_name in created_physical_props:
+						pp = created_physical_props[prop_name]
+						geom.physicalPropertyAssignment.onFaces[f_id] = pp
+						assigned_count += 1
+						print(f"    ✓ Physical Property '{prop_name}' → Face {f_id}")
+				else:
+					failed_count += 1
+					print(f"    ✗ Face non trovata per {prop_data['property_name']}")
+			except Exception as e:
+				failed_count += 1
+				print(f"    ✗ Errore: {str(e)}")
+
+		# ═══════════════════════════════════════════════════════════
+		# PHYSICAL PROPERTIES - SOLIDS
+		# ═══════════════════════════════════════════════════════════
+		for prop_data in geom_data['properties']['physical']['solids']:
+			try:
+				target_coords = prop_data.get('vertex_coordinates', [])
+				if not target_coords:
+					continue
+
+				# Trova solid con questi vertici
+				s_id = find_solid_by_vertices(shape, target_coords)
+
+				if s_id is not None:
+					prop_name = prop_data['property_name']
+					if prop_name in created_physical_props:
+						pp = created_physical_props[prop_name]
+						geom.physicalPropertyAssignment.onSolids[s_id] = pp
+						assigned_count += 1
+						print(f"    ✓ Physical Property '{prop_name}' → Solid {s_id}")
+				else:
+					failed_count += 1
+					print(f"    ✗ Solid non trovato per {prop_data['property_name']}")
+			except Exception as e:
+				failed_count += 1
+				print(f"    ✗ Errore: {str(e)}")
+
+		# ═══════════════════════════════════════════════════════════
+		# ELEMENT PROPERTIES - VERTICES
+		# ═══════════════════════════════════════════════════════════
+		for prop_data in geom_data['properties']['element']['vertices']:
+			try:
+				target_coords = prop_data.get('coordinates')
+				if not target_coords:
+					continue
+
+				v_id = find_vertex_by_coordinates(shape, target_coords)
+
+				if v_id is not None:
+					prop_name = prop_data['property_name']
+					if prop_name in created_element_props:
+						ep = created_element_props[prop_name]
+						geom.elementPropertyAssignment.onVertices[v_id] = ep
+						assigned_count += 1
+						print(f"    ✓ Element Property '{prop_name}' → Vertex {v_id}")
+				else:
+					failed_count += 1
+					print(f"    ✗ Vertex non trovato per {prop_data['property_name']}")
+			except Exception as e:
+				failed_count += 1
+				print(f"    ✗ Errore: {str(e)}")
+
+		# ═══════════════════════════════════════════════════════════
+		# ELEMENT PROPERTIES - EDGES
+		# ═══════════════════════════════════════════════════════════
+		for prop_data in geom_data['properties']['element']['edges']:
+			try:
+				target_coords = prop_data.get('vertex_coordinates', [])
+				if not target_coords:
+					continue
+
+				e_id = find_edge_by_vertices(shape, target_coords)
+
+				if e_id is not None:
+					prop_name = prop_data['property_name']
+					if prop_name in created_element_props:
+						ep = created_element_props[prop_name]
+						geom.elementPropertyAssignment.onEdges[e_id] = ep
+						assigned_count += 1
+						print(f"    ✓ Element Property '{prop_name}' → Edge {e_id}")
+				else:
+					failed_count += 1
+					print(f"    ✗ Edge non trovato per {prop_data['property_name']}")
+			except Exception as e:
+				failed_count += 1
+				print(f"    ✗ Errore: {str(e)}")
+
+		# ═══════════════════════════════════════════════════════════
+		# ELEMENT PROPERTIES - FACES
+		# ═══════════════════════════════════════════════════════════
+		for prop_data in geom_data['properties']['element']['faces']:
+			try:
+				target_coords = prop_data.get('vertex_coordinates', [])
+				if not target_coords:
+					continue
+
+				f_id = find_face_by_vertices(shape, target_coords)
+
+				if f_id is not None:
+					prop_name = prop_data['property_name']
+					if prop_name in created_element_props:
+						ep = created_element_props[prop_name]
+						geom.elementPropertyAssignment.onFaces[f_id] = ep
+						assigned_count += 1
+						print(f"    ✓ Element Property '{prop_name}' → Face {f_id}")
+				else:
+					failed_count += 1
+					print(f"    ✗ Face non trovata per {prop_data['property_name']}")
+			except Exception as e:
+				failed_count += 1
+				print(f"    ✗ Errore: {str(e)}")
+
+		# ═══════════════════════════════════════════════════════════
+		# ELEMENT PROPERTIES - SOLIDS
+		# ═══════════════════════════════════════════════════════════
+		for prop_data in geom_data['properties']['element']['solids']:
+			try:
+				target_coords = prop_data.get('vertex_coordinates', [])
+				if not target_coords:
+					continue
+
+				s_id = find_solid_by_vertices(shape, target_coords)
+
+				if s_id is not None:
+					prop_name = prop_data['property_name']
+					if prop_name in created_element_props:
+						ep = created_element_props[prop_name]
+						geom.elementPropertyAssignment.onSolids[s_id] = ep
+						assigned_count += 1
+						print(f"    ✓ Element Property '{prop_name}' → Solid {s_id}")
+				else:
+					failed_count += 1
+					print(f"    ✗ Solid non trovato per {prop_data['property_name']}")
+			except Exception as e:
+				failed_count += 1
+				print(f"    ✗ Errore: {str(e)}")
+
+		# Commit changes per questa geometria
+		doc.commitChanges()
+
+	print("\n" + "-"*80)
+	print(f"✓ Proprietà assegnate: {assigned_count}")
+	if failed_count > 0:
+		print(f"✗ Assegnazioni fallite: {failed_count}")
+
+	return assigned_count, failed_count
+
+# ==============================================================================
 # MODALITÀ COPY
 # ==============================================================================
 
@@ -688,12 +1027,20 @@ def run_copy_mode():
 					created_element_props[prop_name] = ep
 
 	print("\n" + "="*80)
-	print("IMPORT E RICREAZIONE COMPLETATI!")
+	print(f"✓ Import completato: {numero_file} geometrie")
+	print(f"✓ Physical Properties create: {len(created_physical_props)}")
+	print(f"✓ Element Properties create: {len(created_element_props)}")
+	print("="*80)
+
+	# ASSEGNA PROPRIETÀ TRAMITE COORDINATE MATCHING
+	assigned, failed = assign_properties_to_geometries(geometries_data, created_physical_props, created_element_props)
+
+	print("\n" + "="*80)
+	print("🎉 COPY COMPLETATO!")
 	print(f"Geometrie importate: {numero_file}")
-	print(f"Physical Properties create: {len(created_physical_props)}")
-	print(f"Element Properties create: {len(created_element_props)}")
-	print("\n💡 PROSSIMO STEP:")
-	print("   Implementare coordinate matching per assegnare proprietà")
+	print(f"Proprietà assegnate: {assigned}")
+	if failed > 0:
+		print(f"⚠️  Assegnazioni fallite: {failed}")
 	print("="*80)
 
 	doc.dirty = True
