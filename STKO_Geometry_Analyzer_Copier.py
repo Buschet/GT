@@ -1,13 +1,17 @@
 """
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║         STKO GEOMETRY READER & COPIER - UNIFIED SCRIPT                       ║
+║         STKO GEOMETRY READER & COPIER - UNIFIED SCRIPT (STEP Edition)       ║
 ║                                                                              ║
-║  Copy = False: Analizza minuziosamente le geometrie                         ║
-║  Copy = True:  Ricrea geometrie, physical properties, element properties    ║
+║  Copy = False: Analizza geometrie + Export STEP (.stp) + JSON/CSV           ║
+║  Copy = True:  Import STEP + Ricrea physical/element properties             ║
+║                                                                              ║
+║  🆕 NOVITÀ: Usa file STEP per geometria precisa al 100%                     ║
+║            Mantiene analisi dettagliata proprietà su subshapes              ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 """
 
 from PyMpc import *
+from PySide2.QtCore import QSettings
 import json
 import csv
 import os
@@ -27,24 +31,30 @@ ANALYZE_CONFIG = {
 	'export_csv': True,
 	'export_report': True,
 	'export_coordinates': True,
+	'export_step': True,                 # 🆕 Esporta geometrie in formato STEP (.stp)
+	'use_native_export': False,          # 🆕 True = usa App.runCommand (dialog) | False = API diretta
+	'step_folder': 'STKO_STEP_Export',   # 🆕 Cartella per file STEP
 	'output_filename': 'STKO_Analysis',  # Nome file base (senza estensione)
 	'add_timestamp': False,              # True = aggiunge _YYYYMMDD_HHMMSS al nome
 	'verbose': True
 }
 # IMPORTANTE: Se add_timestamp = False, i file saranno sovrascritti ad ogni esecuzione
 # IMPORTANTE: output_filename deve corrispondere a input_json_file in COPY_CONFIG
+# IMPORTANTE: step_folder deve corrispondere a step_folder in COPY_CONFIG
 
 # Configurazione per modalità COPIA (Copy = True)
 COPY_CONFIG = {
 	# File JSON da cui leggere i dati per ricreare le geometrie
 	'input_json_file': 'STKO_Analysis.json',  # ← Deve corrispondere a output_filename + '.json'
-	
+	'step_folder': 'STKO_STEP_Export',        # 🆕 Cartella contenente i file STEP da importare
+
 	# Opzioni di creazione
 	'create_new_document': False,  # True = nuovo doc | False = aggiungi al corrente
 	'prefix_names': 'Copy_',       # Prefisso per nomi geometrie copiate
 	'copy_properties': True,        # Copia anche le proprietà
+	'use_step_import': True,        # 🆕 True = importa da STEP | False = usa vecchio metodo
 	'verbose': True,
-	
+
 	# Filtri opzionali per copiare solo alcune geometrie
 	'filter_by_name': '',          # Es: "Wall" per copiare solo muri
 	'filter_ids': [],              # Es: [1,2,3] per copiare solo questi ID
@@ -706,10 +716,124 @@ def run_analyze_mode():
 						coords['x'], coords['y'], coords['z']
 					])
 		print(f"✓ Esportato Coordinate: {filename}")
-	
+
+	# 🆕 EXPORT STEP FILES
+	if ANALYZE_CONFIG['export_step']:
+		step_folder = ANALYZE_CONFIG['step_folder']
+		if ANALYZE_CONFIG['add_timestamp']:
+			step_folder = f"{step_folder}_{timestamp}"
+
+		# Ottieni percorso assoluto della cartella
+		abs_step_folder = os.path.abspath(step_folder)
+
+		# Crea cartella se non esiste
+		if not os.path.exists(abs_step_folder):
+			os.makedirs(abs_step_folder)
+
+		use_native = ANALYZE_CONFIG.get('use_native_export', False)
+		method_name = "Metodo Nativo (Dialog)" if use_native else "API Diretta (Automatico)"
+
+		print(f"\n[EXPORT STEP FILES - {method_name}]")
+		print(f"Cartella: {abs_step_folder}/")
+		print("-"*80)
+
+		export_count = 0
+		export_errors = 0
+
+		if use_native:
+			# ═══════════════════════════════════════════════════════════
+			# METODO 1: Comando Nativo STKO (con dialog interattivo)
+			# ═══════════════════════════════════════════════════════════
+			# Salva selezione corrente
+			current_selection = doc.scene.getSelection()
+
+			for idx, (geom_id, geom) in enumerate(doc.geometries.items(), 1):
+				try:
+					safe_name = "".join(c for c in geom.name if c.isalnum() or c in (' ', '-', '_')).strip()
+					if not safe_name:
+						safe_name = f"geometry_{geom_id}"
+
+					nome_exp = f"geom_{geom_id}_{safe_name}"
+					new_dir = f"{abs_step_folder}/{nome_exp}"
+
+					# Seleziona geometria
+					doc.scene.clearSelection()
+					doc.scene.select(geom)
+
+					# Imposta path nelle QSettings
+					sett = QSettings()
+					sett.beginGroup('FileDialogManager')
+					sett.beginGroup('LD_ImpGeom')
+					sett.setValue('LastDirectory', new_dir)
+					sett.endGroup()
+					sett.endGroup()
+
+					# Esegui comando export (apre dialog)
+					App.runCommand("ExportGeometry")
+
+					step_filename = f"{new_dir}.stp"
+					all_geometries_data['geometries'][idx-1]['step_file'] = step_filename
+
+					export_count += 1
+					if ANALYZE_CONFIG['verbose']:
+						print(f"  [{idx}/{len(doc.geometries)}] ✓ {geom.name} → {step_filename}")
+
+				except Exception as e:
+					export_errors += 1
+					print(f"  [{idx}/{len(doc.geometries)}] ✗ Errore: {str(e)}")
+					all_geometries_data['geometries'][idx-1]['step_file'] = None
+
+				App.processEvents()
+
+			# Ripristina selezione
+			doc.scene.clearSelection()
+			for item in current_selection:
+				doc.scene.select(item)
+
+		else:
+			# ═══════════════════════════════════════════════════════════
+			# METODO 2: API Diretta (completamente automatico)
+			# ═══════════════════════════════════════════════════════════
+			for idx, (geom_id, geom) in enumerate(doc.geometries.items(), 1):
+				try:
+					safe_name = "".join(c for c in geom.name if c.isalnum() or c in (' ', '-', '_')).strip()
+					if not safe_name:
+						safe_name = f"geometry_{geom_id}"
+
+					step_filename = f"{abs_step_folder}/geom_{geom_id}_{safe_name}.stp"
+
+					# Esporta usando API diretta
+					geom.shape.exportToSTEP(step_filename)
+
+					all_geometries_data['geometries'][idx-1]['step_file'] = step_filename
+
+					export_count += 1
+					if ANALYZE_CONFIG['verbose']:
+						print(f"  [{idx}/{len(doc.geometries)}] ✓ {geom.name} → {step_filename}")
+
+				except Exception as e:
+					export_errors += 1
+					print(f"  [{idx}/{len(doc.geometries)}] ✗ Errore: {str(e)}")
+					all_geometries_data['geometries'][idx-1]['step_file'] = None
+
+				App.processEvents()
+
+		print(f"\n✓ File STEP esportati: {export_count}/{len(doc.geometries)}")
+		if export_errors > 0:
+			print(f"✗ Errori export: {export_errors}")
+
+		# Ri-esporta JSON con percorsi STEP aggiornati
+		if ANALYZE_CONFIG['export_json']:
+			filename = f"{base_filename}.json"
+			with open(filename, 'w', encoding='utf-8') as f:
+				json.dump(all_geometries_data, f, indent=2, ensure_ascii=False)
+			print(f"✓ JSON aggiornato con percorsi STEP: {filename}")
+
 	print("\n" + "="*80)
 	print("ANALISI COMPLETATA!")
 	print(f"Geometrie analizzate: {all_geometries_data['total_geometries']}")
+	if ANALYZE_CONFIG['export_step']:
+		print(f"File STEP esportati: {step_folder}/")
 	print(f"\n💡 PROSSIMO STEP:")
 	print(f"   Per ricreazione: Imposta Copy = True")
 	print(f"   Il file JSON '{base_filename}.json' è pronto")
@@ -838,156 +962,200 @@ def set_attribute_value(attr, value):
 		pass
 
 def recreate_geometry_from_data(geom_data):
-	"""Ricrea una geometria dai dati JSON"""
-	
+	"""Ricrea una geometria dai dati JSON usando STEP import (preferito) o metodo manuale (fallback)"""
+
 	shape_type = geom_data['shape_type']
 	new_name = COPY_CONFIG['prefix_names'] + geom_data['name']
-	
-	try:
-		# Ricrea geometria in base al tipo
-		if shape_type == "VERTEX":
-			# Crea vertex singolo - coordinate dirette
-			if len(geom_data['vertices']) > 0:
-				coords = geom_data['vertices'][0]['coordinates']
-				new_shape = FxOccBuilder.makeVertex(coords['x'], coords['y'], coords['z'])
-		
-		elif shape_type == "EDGE":
-			# Crea edge da due vertici - coordinate dirette
-			if len(geom_data['vertices']) >= 2:
-				v1 = geom_data['vertices'][0]['coordinates']
-				v2 = geom_data['vertices'][1]['coordinates']
-				# Crea vertici con coordinate dirette
-				vert1 = FxOccBuilder.makeVertex(v1['x'], v1['y'], v1['z'])
-				vert2 = FxOccBuilder.makeVertex(v2['x'], v2['y'], v2['z'])
-				# Crea edge dai vertici
-				new_shape = FxOccBuilder.makeEdge(vert1, vert2)
-		
-		elif shape_type == "WIRE":
-			# Crea wire da edges - coordinate dirette
-			edges = []
-			for edge_data in geom_data['edges']:
-				if len(edge_data['vertices']) >= 2:
-					v1 = edge_data['vertices'][0]['coordinates']
-					v2 = edge_data['vertices'][1]['coordinates']
+	new_shape = None
+
+	# ═══════════════════════════════════════════════════════════
+	# 🆕 METODO 1: IMPORT DA FILE STEP (PREFERITO)
+	# ═══════════════════════════════════════════════════════════
+	if COPY_CONFIG['use_step_import'] and 'step_file' in geom_data and geom_data['step_file']:
+		step_file = geom_data['step_file']
+
+		try:
+			if os.path.exists(step_file):
+				if COPY_CONFIG['verbose']:
+					print(f"    Importando da STEP: {step_file}")
+
+				# Importa geometria da file STEP
+				new_shape = MpcShape()
+				new_shape.importFromSTEP(step_file)
+
+				if COPY_CONFIG['verbose']:
+					print(f"    ✓ Geometria importata correttamente da STEP")
+
+			else:
+				print(f"    [WARNING] File STEP non trovato: {step_file}")
+				print(f"              Usando metodo manuale...")
+
+		except Exception as e:
+			print(f"    [WARNING] Errore import STEP: {str(e)}")
+			print(f"              Usando metodo manuale...")
+			new_shape = None
+
+	# ═══════════════════════════════════════════════════════════
+	# METODO 2: RICREAZIONE MANUALE (FALLBACK)
+	# ═══════════════════════════════════════════════════════════
+	if new_shape is None:
+		if COPY_CONFIG['verbose']:
+			print(f"    Usando ricreazione manuale per tipo: {shape_type}")
+
+		try:
+			# Ricrea geometria in base al tipo
+			if shape_type == "VERTEX":
+				# Crea vertex singolo - coordinate dirette
+				if len(geom_data['vertices']) > 0:
+					coords = geom_data['vertices'][0]['coordinates']
+					new_shape = FxOccBuilder.makeVertex(coords['x'], coords['y'], coords['z'])
+
+			elif shape_type == "EDGE":
+				# Crea edge da due vertici - coordinate dirette
+				if len(geom_data['vertices']) >= 2:
+					v1 = geom_data['vertices'][0]['coordinates']
+					v2 = geom_data['vertices'][1]['coordinates']
 					# Crea vertici con coordinate dirette
 					vert1 = FxOccBuilder.makeVertex(v1['x'], v1['y'], v1['z'])
 					vert2 = FxOccBuilder.makeVertex(v2['x'], v2['y'], v2['z'])
-					# Crea edge
-					edge = FxOccBuilder.makeEdge(vert1, vert2)
-					edges.append(edge)
-			if len(edges) > 0:
-				new_shape = FxOccBuilder.makeWire(edges)
-		
-		elif shape_type in ["FACE", "SHELL", "SOLID", "COMPOUND"]:
-			# Per geometrie complesse, usa approccio semplificato con bounding box
-			# Ricrea come box solido usando vertici del bounding box
-			bbox = geom_data['bounding_box']
-			
-			# Debug: mostra valori bbox
-			if COPY_CONFIG['verbose']:
-				print(f"    [DEBUG] BBox: {bbox}")
-			
-			# Check validità bbox più robusto
-			if bbox is None:
-				print(f"    [WARNING] Bounding box è None per {shape_type}")
-				return None
-			
-			# Verifica che tutti i valori necessari esistano e siano validi
-			required_keys = ['min_x', 'min_y', 'min_z', 'max_x', 'max_y', 'max_z', 'size_x', 'size_y', 'size_z']
-			if not all(key in bbox for key in required_keys):
-				print(f"    [WARNING] Bounding box incompleto per {shape_type}")
-				return None
-			
-			# Verifica che i valori non siano None
-			if any(bbox[key] is None for key in required_keys):
-				print(f"    [WARNING] Bounding box contiene valori None per {shape_type}")
-				return None
-			
-			# Verifica dimensioni positive
-			if bbox['size_x'] <= 0 or bbox['size_y'] <= 0 or bbox['size_z'] <= 0:
-				print(f"    [WARNING] Bounding box con dimensioni non positive per {shape_type}")
-				print(f"              size_x={bbox['size_x']}, size_y={bbox['size_y']}, size_z={bbox['size_z']}")
-				return None
-			
-			try:
-				# Coordinate bounding box
-				x0, y0, z0 = bbox['min_x'], bbox['min_y'], bbox['min_z']
-				x1, y1, z1 = bbox['max_x'], bbox['max_y'], bbox['max_z']
-				
-				# Crea 8 vertici del box - coordinate dirette
-				v1 = FxOccBuilder.makeVertex(x0, y0, z0)  # Bottom face
-				v2 = FxOccBuilder.makeVertex(x1, y0, z0)
-				v3 = FxOccBuilder.makeVertex(x1, y1, z0)
-				v4 = FxOccBuilder.makeVertex(x0, y1, z0)
-				v5 = FxOccBuilder.makeVertex(x0, y0, z1)  # Top face
-				v6 = FxOccBuilder.makeVertex(x1, y0, z1)
-				v7 = FxOccBuilder.makeVertex(x1, y1, z1)
-				v8 = FxOccBuilder.makeVertex(x0, y1, z1)
-				
-				# Bottom face
-				e1 = FxOccBuilder.makeEdge(v1, v2)
-				e2 = FxOccBuilder.makeEdge(v2, v3)
-				e3 = FxOccBuilder.makeEdge(v3, v4)
-				e4 = FxOccBuilder.makeEdge(v4, v1)
-				w1 = FxOccBuilder.makeWire([e1, e2, e3, e4])
-				f1 = FxOccBuilder.makeFace(w1)
-				
-				# Top face
-				e5 = FxOccBuilder.makeEdge(v5, v6)
-				e6 = FxOccBuilder.makeEdge(v6, v7)
-				e7 = FxOccBuilder.makeEdge(v7, v8)
-				e8 = FxOccBuilder.makeEdge(v8, v5)
-				w2 = FxOccBuilder.makeWire([e5, e6, e7, e8])
-				f2 = FxOccBuilder.makeFace(w2)
-				
-				# Vertical edges
-				e9 = FxOccBuilder.makeEdge(v1, v5)
-				e10 = FxOccBuilder.makeEdge(v2, v6)
-				e11 = FxOccBuilder.makeEdge(v4, v8)
-				e12 = FxOccBuilder.makeEdge(v3, v7)
-				
-				# Front face
-				w3 = FxOccBuilder.makeWire([e1, e10, e5, e9])
-				f3 = FxOccBuilder.makeFace(w3)
-				
-				# Back face
-				w4 = FxOccBuilder.makeWire([e3, e12, e7, e11])
-				f4 = FxOccBuilder.makeFace(w4)
-				
-				# Left face
-				w5 = FxOccBuilder.makeWire([e4, e9, e8, e11])
-				f5 = FxOccBuilder.makeFace(w5)
-				
-				# Right face
-				w6 = FxOccBuilder.makeWire([e2, e10, e6, e12])
-				f6 = FxOccBuilder.makeFace(w6)
-				
-				# Shell e Solid
-				shell = FxOccBuilder.makeShell([f1, f2, f3, f4, f5, f6])
-				new_shape = FxOccBuilder.makeSolid(shell)
-				
-				print(f"    [INFO] Geometria {shape_type} ricreata come box solido")
-				
-			except Exception as e:
-				print(f"    [ERROR] Errore creazione box solido: {str(e)}")
-				import traceback
-				traceback.print_exc()
-				return None
-		
-		else:
-			print(f"    [WARNING] Tipo {shape_type} non supportato per ricreazione")
+					# Crea edge dai vertici
+					new_shape = FxOccBuilder.makeEdge(vert1, vert2)
+
+			elif shape_type == "WIRE":
+				# Crea wire da edges - coordinate dirette
+				edges = []
+				for edge_data in geom_data['edges']:
+					if len(edge_data['vertices']) >= 2:
+						v1 = edge_data['vertices'][0]['coordinates']
+						v2 = edge_data['vertices'][1]['coordinates']
+						# Crea vertici con coordinate dirette
+						vert1 = FxOccBuilder.makeVertex(v1['x'], v1['y'], v1['z'])
+						vert2 = FxOccBuilder.makeVertex(v2['x'], v2['y'], v2['z'])
+						# Crea edge
+						edge = FxOccBuilder.makeEdge(vert1, vert2)
+						edges.append(edge)
+				if len(edges) > 0:
+					new_shape = FxOccBuilder.makeWire(edges)
+
+			elif shape_type in ["FACE", "SHELL", "SOLID", "COMPOUND"]:
+				# Per geometrie complesse, usa approccio semplificato con bounding box
+				# Ricrea come box solido usando vertici del bounding box
+				bbox = geom_data['bounding_box']
+
+				# Debug: mostra valori bbox
+				if COPY_CONFIG['verbose']:
+					print(f"    [DEBUG] BBox: {bbox}")
+
+				# Check validità bbox più robusto
+				if bbox is None:
+					print(f"    [WARNING] Bounding box è None per {shape_type}")
+					new_shape = None
+
+				# Verifica che tutti i valori necessari esistano e siano validi
+				elif not all(key in ['min_x', 'min_y', 'min_z', 'max_x', 'max_y', 'max_z', 'size_x', 'size_y', 'size_z'] for key in bbox if key in bbox):
+					print(f"    [WARNING] Bounding box incompleto per {shape_type}")
+					new_shape = None
+
+				# Verifica che i valori non siano None
+				elif any(bbox.get(key) is None for key in ['min_x', 'min_y', 'min_z', 'max_x', 'max_y', 'max_z']):
+					print(f"    [WARNING] Bounding box contiene valori None per {shape_type}")
+					new_shape = None
+
+				# Verifica dimensioni positive
+				elif bbox.get('size_x', 0) <= 0 or bbox.get('size_y', 0) <= 0 or bbox.get('size_z', 0) <= 0:
+					print(f"    [WARNING] Bounding box con dimensioni non positive per {shape_type}")
+					print(f"              size_x={bbox.get('size_x')}, size_y={bbox.get('size_y')}, size_z={bbox.get('size_z')}")
+					new_shape = None
+
+				else:
+					try:
+						# Coordinate bounding box
+						x0, y0, z0 = bbox['min_x'], bbox['min_y'], bbox['min_z']
+						x1, y1, z1 = bbox['max_x'], bbox['max_y'], bbox['max_z']
+
+						# Crea 8 vertici del box - coordinate dirette
+						v1 = FxOccBuilder.makeVertex(x0, y0, z0)  # Bottom face
+						v2 = FxOccBuilder.makeVertex(x1, y0, z0)
+						v3 = FxOccBuilder.makeVertex(x1, y1, z0)
+						v4 = FxOccBuilder.makeVertex(x0, y1, z0)
+						v5 = FxOccBuilder.makeVertex(x0, y0, z1)  # Top face
+						v6 = FxOccBuilder.makeVertex(x1, y0, z1)
+						v7 = FxOccBuilder.makeVertex(x1, y1, z1)
+						v8 = FxOccBuilder.makeVertex(x0, y1, z1)
+
+						# Bottom face
+						e1 = FxOccBuilder.makeEdge(v1, v2)
+						e2 = FxOccBuilder.makeEdge(v2, v3)
+						e3 = FxOccBuilder.makeEdge(v3, v4)
+						e4 = FxOccBuilder.makeEdge(v4, v1)
+						w1 = FxOccBuilder.makeWire([e1, e2, e3, e4])
+						f1 = FxOccBuilder.makeFace(w1)
+
+						# Top face
+						e5 = FxOccBuilder.makeEdge(v5, v6)
+						e6 = FxOccBuilder.makeEdge(v6, v7)
+						e7 = FxOccBuilder.makeEdge(v7, v8)
+						e8 = FxOccBuilder.makeEdge(v8, v5)
+						w2 = FxOccBuilder.makeWire([e5, e6, e7, e8])
+						f2 = FxOccBuilder.makeFace(w2)
+
+						# Vertical edges
+						e9 = FxOccBuilder.makeEdge(v1, v5)
+						e10 = FxOccBuilder.makeEdge(v2, v6)
+						e11 = FxOccBuilder.makeEdge(v4, v8)
+						e12 = FxOccBuilder.makeEdge(v3, v7)
+
+						# Front face
+						w3 = FxOccBuilder.makeWire([e1, e10, e5, e9])
+						f3 = FxOccBuilder.makeFace(w3)
+
+						# Back face
+						w4 = FxOccBuilder.makeWire([e3, e12, e7, e11])
+						f4 = FxOccBuilder.makeFace(w4)
+
+						# Left face
+						w5 = FxOccBuilder.makeWire([e4, e9, e8, e11])
+						f5 = FxOccBuilder.makeFace(w5)
+
+						# Right face
+						w6 = FxOccBuilder.makeWire([e2, e10, e6, e12])
+						f6 = FxOccBuilder.makeFace(w6)
+
+						# Shell e Solid
+						shell = FxOccBuilder.makeShell([f1, f2, f3, f4, f5, f6])
+						new_shape = FxOccBuilder.makeSolid(shell)
+
+						print(f"    [INFO] Geometria {shape_type} ricreata come box solido")
+
+					except Exception as e:
+						print(f"    [ERROR] Errore creazione box solido: {str(e)}")
+						import traceback
+						traceback.print_exc()
+						new_shape = None
+
+			else:
+				print(f"    [WARNING] Tipo {shape_type} non supportato per ricreazione")
+				new_shape = None
+
+		except Exception as e:
+			print(f"    [WARNING] Errore ricreazione manuale: {str(e)}")
+			new_shape = None
+
+	# ═══════════════════════════════════════════════════════════
+	# CREAZIONE GEOMETRIA STKO
+	# ═══════════════════════════════════════════════════════════
+	if new_shape is not None:
+		try:
+			new_geom_id = doc.geometries.getlastkey(0) + 1
+			new_geom = MpcGeometry(new_geom_id, new_name, new_shape)
+			doc.addGeometry(new_geom)
+			doc.commitChanges()
+			return new_geom
+		except Exception as e:
+			print(f"    [ERROR] Errore creazione geometria STKO: {str(e)}")
 			return None
-		
-		# Crea geometria STKO
-		new_geom_id = doc.geometries.getlastkey(0) + 1
-		new_geom = MpcGeometry(new_geom_id, new_name, new_shape)
-		doc.addGeometry(new_geom)
-		doc.commitChanges()
-		
-		return new_geom
-	
-	except Exception as e:
-		print(f"    [ERROR] Errore ricreazione geometria: {str(e)}")
+	else:
+		print(f"    [ERROR] Impossibile creare geometria")
 		return None
 
 def assign_properties_to_geometry(geom, geom_data):
