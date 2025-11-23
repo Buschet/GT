@@ -554,6 +554,66 @@ def find_solid_by_vertices(shape, target_vertex_coords):
 
 	return None
 
+def find_matching_subgeometry_index(shape, geom_data, subgeom_type):
+	"""
+	Trova quale subgeometry del JSON (solid/edge/face) corrisponde alla geometria importata
+	confrontando le coordinate dei vertici
+
+	Returns: index del subgeometry nel JSON che matcha, o None
+	"""
+	# Ottieni tutti i vertici della geometria importata
+	num_vertices = shape.getNumberOfSubshapes(MpcSubshapeType.Vertex)
+	imported_coords = []
+	for v_id in range(num_vertices):
+		coords = extract_vertex_coordinates(shape, v_id)
+		if coords['x'] is not None:
+			imported_coords.append(coords)
+
+	if not imported_coords:
+		return None
+
+	# Cerca quale subgeometry del JSON ha gli stessi vertici
+	if subgeom_type == 'solid':
+		props_list = geom_data['properties']['physical']['solids'] + geom_data['properties']['element']['solids']
+	elif subgeom_type == 'edge':
+		props_list = geom_data['properties']['physical']['edges'] + geom_data['properties']['element']['edges']
+	elif subgeom_type == 'face':
+		props_list = geom_data['properties']['physical']['faces'] + geom_data['properties']['element']['faces']
+	else:
+		return None
+
+	# Raggruppa per solid/edge/face id
+	subgeom_coords_map = {}
+	for prop in props_list:
+		if subgeom_type == 'solid':
+			idx = prop.get('solid_id')
+		elif subgeom_type == 'edge':
+			idx = prop.get('edge_id')
+		elif subgeom_type == 'face':
+			idx = prop.get('face_id')
+
+		if idx is not None and idx not in subgeom_coords_map:
+			coords = prop.get('vertex_coordinates', [])
+			if coords:
+				subgeom_coords_map[idx] = coords
+
+	# Confronta coordinate
+	for idx, json_coords in subgeom_coords_map.items():
+		# Verifica che il numero di vertici sia uguale
+		if len(json_coords) != len(imported_coords):
+			continue
+
+		# Verifica che tutti i vertici matchino
+		match = all(
+			any(coordinates_match(ic, jc) for jc in json_coords)
+			for ic in imported_coords
+		)
+
+		if match:
+			return idx
+
+	return None
+
 def assign_properties_to_geometries(geometries_data, created_physical_props, created_element_props):
 	"""Assegna le proprietà alle geometrie importate tramite coordinate matching"""
 	print("\n[FASE 4] Assegnazione Proprietà tramite Coordinate Matching")
@@ -580,6 +640,34 @@ def assign_properties_to_geometries(geometries_data, created_physical_props, cre
 
 		print(f"  Assegnando proprietà a: {geom.name}")
 		shape = geom.shape
+
+		# Determina il tipo di geometria e trova il subgeometry corrispondente nel JSON
+		shape_type = geom_data['shape_type']
+		matched_subgeom_index = None
+
+		if shape_type in ['SOLID', 'COMPSOLID']:
+			# Per solidi, trova quale solid del JSON corrisponde
+			matched_subgeom_index = find_matching_subgeometry_index(shape, geom_data, 'solid')
+			if matched_subgeom_index is not None:
+				print(f"    → Match trovato: Solid {matched_subgeom_index} del JSON")
+			else:
+				print(f"    → Nessun solid matching trovato, assegno a tutti")
+
+		elif shape_type == 'EDGE':
+			# Per edge, trova quale edge del JSON corrisponde
+			matched_subgeom_index = find_matching_subgeometry_index(shape, geom_data, 'edge')
+			if matched_subgeom_index is not None:
+				print(f"    → Match trovato: Edge {matched_subgeom_index} del JSON")
+			else:
+				print(f"    → Nessun edge matching trovato, assegno a tutti")
+
+		elif shape_type == 'FACE':
+			# Per face, trova quale face del JSON corrisponde
+			matched_subgeom_index = find_matching_subgeometry_index(shape, geom_data, 'face')
+			if matched_subgeom_index is not None:
+				print(f"    → Match trovato: Face {matched_subgeom_index} del JSON")
+			else:
+				print(f"    → Nessuna face matching trovata, assegno a tutti")
 
 		# ═══════════════════════════════════════════════════════════
 		# PHYSICAL PROPERTIES - VERTICES
@@ -612,6 +700,10 @@ def assign_properties_to_geometries(geometries_data, created_physical_props, cre
 		# ═══════════════════════════════════════════════════════════
 		for prop_data in geom_data['properties']['physical']['edges']:
 			try:
+				# Se abbiamo un match specifico, assegna SOLO le proprietà di quell'edge
+				if matched_subgeom_index is not None and prop_data.get('edge_id') != matched_subgeom_index:
+					continue
+
 				target_coords = prop_data.get('vertex_coordinates', [])
 				if not target_coords:
 					continue
@@ -638,6 +730,10 @@ def assign_properties_to_geometries(geometries_data, created_physical_props, cre
 		# ═══════════════════════════════════════════════════════════
 		for prop_data in geom_data['properties']['physical']['faces']:
 			try:
+				# Se abbiamo un match specifico, assegna SOLO le proprietà di quella face
+				if matched_subgeom_index is not None and prop_data.get('face_id') != matched_subgeom_index:
+					continue
+
 				target_coords = prop_data.get('vertex_coordinates', [])
 				if not target_coords:
 					continue
@@ -664,6 +760,10 @@ def assign_properties_to_geometries(geometries_data, created_physical_props, cre
 		# ═══════════════════════════════════════════════════════════
 		for prop_data in geom_data['properties']['physical']['solids']:
 			try:
+				# Se abbiamo un match specifico, assegna SOLO le proprietà di quel solid
+				if matched_subgeom_index is not None and prop_data.get('solid_id') != matched_subgeom_index:
+					continue
+
 				target_coords = prop_data.get('vertex_coordinates', [])
 				if not target_coords:
 					continue
@@ -715,6 +815,10 @@ def assign_properties_to_geometries(geometries_data, created_physical_props, cre
 		# ═══════════════════════════════════════════════════════════
 		for prop_data in geom_data['properties']['element']['edges']:
 			try:
+				# Se abbiamo un match specifico, assegna SOLO le proprietà di quell'edge
+				if matched_subgeom_index is not None and prop_data.get('edge_id') != matched_subgeom_index:
+					continue
+
 				target_coords = prop_data.get('vertex_coordinates', [])
 				if not target_coords:
 					continue
@@ -740,6 +844,10 @@ def assign_properties_to_geometries(geometries_data, created_physical_props, cre
 		# ═══════════════════════════════════════════════════════════
 		for prop_data in geom_data['properties']['element']['faces']:
 			try:
+				# Se abbiamo un match specifico, assegna SOLO le proprietà di quella face
+				if matched_subgeom_index is not None and prop_data.get('face_id') != matched_subgeom_index:
+					continue
+
 				target_coords = prop_data.get('vertex_coordinates', [])
 				if not target_coords:
 					continue
@@ -765,6 +873,10 @@ def assign_properties_to_geometries(geometries_data, created_physical_props, cre
 		# ═══════════════════════════════════════════════════════════
 		for prop_data in geom_data['properties']['element']['solids']:
 			try:
+				# Se abbiamo un match specifico, assegna SOLO le proprietà di quel solid
+				if matched_subgeom_index is not None and prop_data.get('solid_id') != matched_subgeom_index:
+					continue
+
 				target_coords = prop_data.get('vertex_coordinates', [])
 				if not target_coords:
 					continue
