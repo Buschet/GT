@@ -159,9 +159,9 @@ def extract_property_data(prop, prop_type):
 			prop_data['property_type'] = prop.XObject.getXObjectName()
 
 			xobj = prop.XObject
-			for attr_name in xobj.attributes:
+			# Usa .items() per iterare sugli attributi
+			for attr_name, attr in xobj.attributes.items():
 				try:
-					attr = xobj.getAttribute(attr_name)
 					prop_data['parameters'][attr_name] = extract_attribute_value(attr)
 				except:
 					pass
